@@ -1939,7 +1939,7 @@ impl View for Reader {
                     // Left ear.
                     } else {
                         if self.search.is_none() {
-                            self.go_to_neighbor(CycleDir::Previous, hub, context);
+                            self.go_to_neighbor(CycleDir::Next, hub, context);
                         } else {
                             self.go_to_results_neighbor(CycleDir::Previous, hub);
                         }
@@ -1959,7 +1959,7 @@ impl View for Reader {
                     // Right ear.
                     } else {
                         if self.search.is_none() {
-                            self.go_to_neighbor(CycleDir::Next, hub, context);
+                            self.go_to_neighbor(CycleDir::Previous, hub, context);
                         } else {
                             self.go_to_results_neighbor(CycleDir::Next, hub);
                         }
@@ -2012,7 +2012,8 @@ impl View for Reader {
                     // Left ear.
                     } else {
                         if self.search.is_none() {
-                            self.go_to_chapter(CycleDir::Previous, hub);
+                            //self.go_to_chapter(CycleDir::Previous, hub);
+                            self.go_to_neighbor(CycleDir::Previous, hub, context);
                         } else {
                             self.go_to_results_page(0, hub);
                         }
@@ -2028,7 +2029,8 @@ impl View for Reader {
                     // Right ear.
                     } else {
                         if self.search.is_none() {
-                            self.go_to_chapter(CycleDir::Next, hub);
+                            //self.go_to_chapter(CycleDir::Next, hub);
+                            self.go_to_neighbor(CycleDir::Previous, hub, context);
                         } else {
                             let last_page = self.search.as_ref().unwrap().highlights.len() - 1;
                             self.go_to_results_page(last_page, hub);
