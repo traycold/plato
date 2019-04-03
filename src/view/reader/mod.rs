@@ -2320,8 +2320,9 @@ impl View for Reader {
                 true
             },
             Event::Select(EntryId::SetFontSize(v)) => {
-                let font_size = self.info.reader.as_ref().and_then(|r| r.font_size)
-                                .unwrap_or(context.settings.reader.font_size);
+                let font_size = self.info.reader.as_ref()
+                                    .and_then(|r| r.font_size)
+                                    .unwrap_or(context.settings.reader.font_size);
                 let font_size = font_size - 1.0 + v as f32 / 10.0;
                 self.set_font_size(font_size, hub, context);
                 true
