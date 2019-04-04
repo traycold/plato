@@ -67,3 +67,8 @@ case "$method" in
 esac
 
 cargo build --release --target=arm-unknown-linux-gnueabihf
+RESULT=$?
+if [ $RESULT -eq 0 ]; then
+	cp target/arm-unknown-linux-gnueabihf/release/plato .
+	arm-linux-gnueabihf-strip plato
+fi
