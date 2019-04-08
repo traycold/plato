@@ -262,6 +262,11 @@ impl Reader {
 
                 if let Some(ref font_family) = r.font_family {
                     doc.set_font_family(font_family, &settings.reader.font_path);
+                    if font_family == "Portada" { 
+                        if let Some(font_wght) = r.font_wght {
+                            doc.set_font_wght(font_wght);
+                        }
+                    }
                 }
 
                 if let Some(line_height) = r.line_height {
@@ -278,6 +283,9 @@ impl Reader {
 
                 if settings.reader.font_family != DEFAULT_FONT_FAMILY {
                     doc.set_font_family(&settings.reader.font_family, &settings.reader.font_path);
+                    if settings.reader.font_family == "Portada" {
+                        doc.set_font_wght(settings.reader.font_wght);
+                    }
                 }
 
                 doc.set_line_height(settings.reader.line_height);
@@ -723,10 +731,17 @@ impl Reader {
                 let font_family = self.info.reader.as_ref()
                                       .and_then(|r| r.font_family.clone())
                                       .unwrap_or_else(|| settings.reader.font_family.clone());
-                tool_bar.update_font_family(font_family, hub);
-                let font_size = self.info.reader.as_ref()
-                                    .and_then(|r| r.font_size)
-                                    .unwrap_or(settings.reader.font_size);
+                tool_bar.update_font_family(font_family.clone(), hub);
+                
+                let font_size = if font_family == "Portada" {
+                                    self.info.reader.as_ref()
+                                        .and_then(|r| r.font_wght)
+                                        .unwrap_or(settings.reader.font_wght)
+                                } else {
+                                    self.info.reader.as_ref()
+                                        .and_then(|r| r.font_size)
+                                        .unwrap_or(settings.reader.font_size)
+                                };
                 tool_bar.update_font_size_slider(font_size, hub);
                 let line_height = self.info.reader.as_ref()
                                       .and_then(|r| r.line_height)
