@@ -55,7 +55,7 @@ impl ToolBar {
                                                     rect![x_offset, rect.min.y,
                                                           x_offset + side + font_family_label_width, rect.min.y + side],
                                                     Event::Show(ViewId::FontFamilyMenu),
-                                                    font_family);
+                                                    font_family.clone());
             children.push(Box::new(font_family_icon) as Box<dyn View>);
             x_offset += side + font_family_label_width;
 
@@ -84,13 +84,26 @@ impl ToolBar {
                                            Event::ToggleNear(ViewId::FontSizeMenu, font_size_rect));
             children.push(Box::new(font_size_icon) as Box<dyn View>);
 
-            let slider = Slider::new(rect![rect.min.x + side, rect.max.y - side,
-                                           rect.max.x - 2 * side, rect.max.y],
-                                     SliderId::FontSize,
-                                     font_size,
-                                     reader_settings.font_size / 2.0,
-                                     3.0 * reader_settings.font_size / 2.0);
-            children.push(Box::new(slider) as Box<dyn View>);
+            if font_family == "Portada" {
+                let font_wght = reader_info.and_then(|r| r.font_wght)
+                                           .unwrap_or(reader_settings.font_wght);
+                let slider = Slider::new(rect![rect.min.x + side, rect.max.y - side,
+                                               rect.max.x - 2 * side, rect.max.y],
+                                         SliderId::FontWght,
+                                         font_wght,
+                                         100.0,
+                                         700.0);
+                children.push(Box::new(slider) as Box<dyn View>);
+            } else {
+                let slider = Slider::new(rect![rect.min.x + side, rect.max.y - side,
+                                               rect.max.x - 2 * side, rect.max.y],
+                                         SliderId::FontSize,
+                                         font_size,
+                                         reader_settings.font_size / 2.0,
+                                         3.0 * reader_settings.font_size / 2.0);
+                children.push(Box::new(slider) as Box<dyn View>);
+            }
+            
         } else {
             let remaining_width = rect.width() as i32 - 2 * side;
             let slider_width = remaining_width / 2;

@@ -20,6 +20,9 @@ pub const DEFAULT_MARGIN_WIDTH: i32 = 8;
 pub const DEFAULT_LINE_HEIGHT: f32 = 1.2;
 // Default font family name
 pub const DEFAULT_FONT_FAMILY: &str = "Libertinus Serif";
+// Default font weight (axis wght)
+pub const DEFAULT_FONT_WGHT: f32 = 400.0;
+
 
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -150,6 +153,7 @@ pub struct ReaderSettings {
     pub font_path: String,
     pub font_family: String,
     pub font_size: f32,
+    pub font_wght: f32,
     pub margin_width: i32,
     pub line_height: f32,
 }
@@ -193,6 +197,7 @@ impl Default for ReaderSettings {
             font_path: DEFAULT_FONT_PATH.to_string(),
             font_family: DEFAULT_FONT_FAMILY.to_string(),
             font_size: DEFAULT_FONT_SIZE,
+            font_wght: DEFAULT_FONT_WGHT,
             margin_width: DEFAULT_MARGIN_WIDTH,
             line_height: DEFAULT_LINE_HEIGHT,
         }

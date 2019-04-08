@@ -335,6 +335,7 @@ pub enum ViewId {
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum SliderId {
     FontSize,
+    FontWght,
     LightIntensity,
     LightWarmth,
     ContrastExponent,
@@ -347,6 +348,7 @@ impl SliderId {
             SliderId::LightIntensity => "Intensity".to_string(),
             SliderId::LightWarmth => "Warmth".to_string(),
             SliderId::FontSize => "Font Size".to_string(),
+            SliderId::FontWght => "Font Wght".to_string(),
             SliderId::ContrastExponent => "Contrast Exponent".to_string(),
             SliderId::ContrastGray => "Contrast Gray".to_string(),
         }
@@ -421,6 +423,7 @@ pub enum EntryId {
     SearchDirection(LinearDir),
     SetFontFamily(String),
     SetFontSize(i32),
+    SetFontWght(i32),
     SetMarginWidth(i32),
     SetLineHeight(i32),
     SetContrastExponent(i32),

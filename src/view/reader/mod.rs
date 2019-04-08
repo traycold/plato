@@ -1623,6 +1623,31 @@ impl Reader {
         self.update_bottom_bar(hub);
     }
 
+    fn set_font_wght(&mut self, font_wght: f32, hub: &Hub, context: &mut Context) {
+        if Arc::strong_count(&self.doc) > 1 {
+            return;
+        }
+
+        if let Some(ref mut r) = self.info.reader {
+            r.font_wght = Some(font_wght);
+        }
+
+        {
+            let mut doc = self.doc.lock().unwrap();
+            doc.set_font_wght(font_wght);
+
+            if !self.synthetic {
+                self.pages_count = doc.pages_count();
+                self.current_page = self.current_page.min(self.pages_count - 1);
+            }
+        }
+
+        self.cache.clear();
+        self.update(None, hub);
+        self.update_tool_bar(hub, context);
+        self.update_bottom_bar(hub);
+    }
+
     fn set_font_family(&mut self, font_family: &str, hub: &Hub, context: &mut Context) {
         if Arc::strong_count(&self.doc) > 1 {
             return;
@@ -2143,6 +2168,10 @@ impl View for Reader {
             },
             Event::Slider(SliderId::FontSize, font_size, FingerStatus::Up) => {
                 self.set_font_size(font_size, hub, context);
+                true
+            },
+            Event::Slider(SliderId::FontWght, font_wght, FingerStatus::Up) => {
+                self.set_font_wght(font_wght, hub, context);
                 true
             },
             Event::Slider(SliderId::ContrastExponent, exponent, FingerStatus::Up) => {

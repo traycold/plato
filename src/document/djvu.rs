@@ -231,6 +231,9 @@ impl Document for DjvuDocument {
     fn layout(&mut self, _width: u32, _height: u32, _font_size: f32, _dpi: u16) {
     }
 
+    fn set_font_wght(&mut self, _font_wght: f32) {
+    }
+
     fn set_font_family(&mut self, _family_name: &str, _search_path: &str) {
     }
 

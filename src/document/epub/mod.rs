@@ -2057,6 +2057,18 @@ impl Document for EpubDocument {
         }
     }
 
+    fn set_font_wght(&mut self, font_wght: f32) {
+        if let Some(fonts) = self.fonts.as_mut() {
+            let var_reg = format!("wght={}", font_wght as i32);
+            let var_bold = format!("wght={}", 300 + (font_wght as i32));
+            fonts.serif.regular.set_variations(&[&*var_reg]);
+            fonts.serif.italic.set_variations(&[&*var_reg]);
+            fonts.serif.bold.set_variations(&[&*var_bold]);
+            fonts.serif.bold_italic.set_variations(&[&*var_bold]);
+            self.cache.clear();
+        }
+    }
+
     fn set_margin_width(&mut self, width: i32) {
         if width >= 0 && width <= 10 {
             self.margin = Edge::uniform(mm_to_px(width as f32, self.dpi).round() as i32);

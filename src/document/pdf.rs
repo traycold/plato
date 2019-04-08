@@ -241,6 +241,9 @@ impl Document for PdfDocument {
         }
     }
 
+    fn set_font_wght(&mut self, _font_wght: f32) {
+    }    
+
     fn set_font_family(&mut self, _family_name: &str, _search_path: &str) {
     }
 
