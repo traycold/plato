@@ -4,6 +4,7 @@ mod css;
 mod parse;
 mod style;
 mod layout;
+mod paragraph_breaker;
 
 use std::io::Read;
 use std::fs::{self, File};

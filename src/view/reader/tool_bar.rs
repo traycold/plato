@@ -30,7 +30,9 @@ impl ToolBar {
         let side = (rect.height() as i32 + thickness) / 2 - thickness;
 
         if reflowable {
-            let mut remaining_width = rect.width() as i32 - 4 * side;
+            let side_x = (((rect.height() as i32 + thickness) as f32 / 2.0 - thickness as f32 ) * 2.0 / 3.0).round() as i32;
+
+            let mut remaining_width = rect.width() as i32 - 4 * side_x;
             let font_family_label_width = remaining_width * 3 / 8;
             remaining_width -= font_family_label_width;
             let margin_label_width = remaining_width / 3;
@@ -44,37 +46,37 @@ impl ToolBar {
                                           .unwrap_or(reader_settings.margin_width);
             let margin_icon = LabeledIcon::new("margin",
                                                rect![x_offset, rect.min.y,
-                                                     x_offset + side + margin_label_width, rect.min.y + side],
+                                                     x_offset + side_x + margin_label_width, rect.min.y + side],
                                                Event::Show(ViewId::MarginWidthMenu),
                                                format!("{} mm", margin_width));
             children.push(Box::new(margin_icon) as Box<dyn View>);
-            x_offset += side + margin_label_width;
+            x_offset += side_x + margin_label_width;
 
             let font_family = reader_info.and_then(|r| r.font_family.clone())
                                          .unwrap_or_else(|| reader_settings.font_family.clone());
             let font_family_icon = LabeledIcon::new("font_family",
                                                     rect![x_offset, rect.min.y,
-                                                          x_offset + side + font_family_label_width, rect.min.y + side],
+                                                          x_offset + side_x + font_family_label_width, rect.min.y + side],
                                                     Event::Show(ViewId::FontFamilyMenu),
                                                     font_family);
             children.push(Box::new(font_family_icon) as Box<dyn View>);
-            x_offset += side + font_family_label_width;
+            x_offset += side_x + font_family_label_width;
 
             let font_var = reader_info.and_then(|r| r.font_var)
                                           .unwrap_or(reader_settings.font_var);
             let font_var_icon = LabeledIcon::new("font_var",
                                                rect![x_offset, rect.min.y,
-                                                     x_offset + side + font_var_label_width, rect.min.y + side],
+                                                     x_offset + side_x + font_var_label_width, rect.min.y + side],
                                                Event::Show(ViewId::FontVarMenu),
                                                format!("{} fv", font_var));
             children.push(Box::new(font_var_icon) as Box<dyn View>);
-            x_offset += side + font_var_label_width;
+            x_offset += side_x + font_var_label_width;
 
             let line_height = reader_info.and_then(|r| r.line_height)
                                          .unwrap_or(reader_settings.line_height);
             let line_height_icon = LabeledIcon::new("line_height",
                                                     rect![x_offset, rect.min.y,
-                                                          x_offset + side + line_height_label_width, rect.min.y + side],
+                                                          x_offset + side_x + line_height_label_width, rect.min.y + side],
                                                     Event::Show(ViewId::LineHeightMenu),
                                                     format!("{:.1} em", line_height));
             children.push(Box::new(line_height_icon) as Box<dyn View>);
@@ -89,14 +91,14 @@ impl ToolBar {
             let font_size = reader_info.and_then(|r| r.font_size)
                                        .unwrap_or(reader_settings.font_size);
             let font_size_rect = rect![rect.min.x, rect.max.y - side,
-                                       rect.min.x + side, rect.max.y];
+                                       rect.min.x + side_x, rect.max.y];
             let font_size_icon = Icon::new("font_size",
                                            font_size_rect,
                                            Event::ToggleNear(ViewId::FontSizeMenu, font_size_rect));
             children.push(Box::new(font_size_icon) as Box<dyn View>);
 
-            let slider = Slider::new(rect![rect.min.x + side, rect.max.y - side,
-                                           rect.max.x - 2 * side, rect.max.y],
+            let slider = Slider::new(rect![rect.min.x + side_x, rect.max.y - side,
+                                           rect.max.x - 2 * side_x, rect.max.y],
                                      SliderId::FontSize,
                                      font_size,
                                      reader_settings.font_size / 2.0,
@@ -275,12 +277,14 @@ impl View for ToolBar {
         let dpi = CURRENT_DEVICE.dpi;
         let thickness = scale_by_dpi(THICKNESS_MEDIUM, dpi) as i32;
         let side = (rect.height() as i32 + thickness) / 2 - thickness;
-
+            
         let mut index = 0;
 
         if self.reflowable {
-            let mut remaining_width = rect.width() as i32 - 4 * side;
-            let font_family_label_width = remaining_width / 2;
+            let side_x = (((rect.height() as i32 + thickness) as f32 / 2.0 - thickness as f32 ) * 2.0 / 3.0).round() as i32;
+
+            let mut remaining_width = rect.width() as i32 - 4 * side_x;
+            let font_family_label_width = remaining_width * 3 / 8;
             remaining_width -= font_family_label_width;
             let margin_label_width = remaining_width / 3;
             let font_var_label_width = remaining_width / 3;
@@ -290,25 +294,25 @@ impl View for ToolBar {
 
             let mut x_offset = rect.min.x;
             self.children[index].resize(rect![x_offset, rect.min.y,
-                                              x_offset + side + margin_label_width, rect.min.y + side],
+                                              x_offset + side_x + margin_label_width, rect.min.y + side],
                                         hub, context);
             index += 1;
-            x_offset += side + margin_label_width;
+            x_offset += side_x + margin_label_width;
 
             self.children[index].resize(rect![x_offset, rect.min.y,
-                                              x_offset + side + font_family_label_width, rect.min.y + side],
+                                              x_offset + side_x + font_family_label_width, rect.min.y + side],
                                         hub, context);
             index += 1;
-            x_offset += side + font_family_label_width;
+            x_offset += side_x + font_family_label_width;
 
             self.children[index].resize(rect![x_offset, rect.min.y,
-                                              x_offset + side + font_var_label_width, rect.min.y + side],
+                                              x_offset + side_x + font_var_label_width, rect.min.y + side],
                                         hub, context);
             index += 1;
-            x_offset += side + font_var_label_width;
+            x_offset += side_x + font_var_label_width;
 
             self.children[index].resize(rect![x_offset, rect.min.y,
-                                              x_offset + side + line_height_label_width, rect.min.y + side],
+                                              x_offset + side_x + line_height_label_width, rect.min.y + side],
                                         hub, context);
             index += 1;
 
@@ -320,12 +324,12 @@ impl View for ToolBar {
 
             // Start of second row.
             let font_size_rect = rect![rect.min.x, rect.max.y - side,
-                                       rect.min.x + side, rect.max.y];
+                                       rect.min.x + side_x, rect.max.y];
             self.children[index].resize(font_size_rect, hub, context);
             index += 1;
 
-            self.children[index].resize(rect![rect.min.x + side, rect.max.y - side,
-                                              rect.max.x - 2 * side, rect.max.y],
+            self.children[index].resize(rect![rect.min.x + side_x, rect.max.y - side,
+                                              rect.max.x - 2 * side_x, rect.max.y],
                                         hub, context);
             index += 1;
         } else {
