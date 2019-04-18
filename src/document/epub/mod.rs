@@ -167,7 +167,8 @@ impl EpubDocument {
         self.offset(self.spine.len())
     }
 
-    fn vertebra_coordinates_with<F>(&self, test: F) -> (usize, usize) where F: Fn(usize, usize) -> bool {
+    fn vertebra_coordinates_with<F>(&self, test: F) -> Option<(usize, usize)>
+                           where F: Fn(usize, usize) -> bool {
         let mut start_offset = 0;
         let mut end_offset = start_offset;
         let mut index = 0;
@@ -175,27 +176,22 @@ impl EpubDocument {
         while index < self.spine.len() {
             end_offset += self.spine[index].size;
             if test(index, end_offset) {
-                break;
+                return Some((index, start_offset))
             }
             start_offset = end_offset;
             index += 1;
         }
 
-        if index == self.spine.len() {
-            index -= 1;
-            start_offset -= self.spine[index].size;
-        }
-
-        (index, start_offset)
+        None
     }
 
-    fn vertebra_coordinates(&self, offset: usize) -> (usize, usize) {
+    fn vertebra_coordinates(&self, offset: usize) -> Option<(usize, usize)> {
         self.vertebra_coordinates_with(|_, end_offset| {
             offset < end_offset
         })
     }
 
-    fn vertebra_coordinates_from_name(&self, name: &str) -> (usize, usize) {
+    fn vertebra_coordinates_from_name(&self, name: &str) -> Option<(usize, usize)> {
         self.vertebra_coordinates_with(|index, _| {
             self.spine[index].path == name
         })
@@ -296,7 +292,7 @@ impl EpubDocument {
         let frag_index_opt = uri.find('#');
         let name = &uri[..frag_index_opt.unwrap_or_else(|| uri.len())];
 
-        let (index, start_offset) = self.vertebra_coordinates_from_name(name);
+        let (index, start_offset) = self.vertebra_coordinates_from_name(name)?;
 
         if frag_index_opt.is_some() {
             let mut text = String::new();
@@ -335,7 +331,7 @@ impl EpubDocument {
         }
 
         let offset = self.resolve_location(loc)?;
-        let (index, start_offset) = self.vertebra_coordinates(offset);
+        let (index, start_offset) = self.vertebra_coordinates(offset)?;
         let page_index = self.page_index(offset, index, start_offset)?;
 
         self.cache.get(&index).map(|display_list| {
@@ -1373,7 +1369,7 @@ impl EpubDocument {
                         position.x += width;
                         last_x_position = position.x;
                     },
-                    ParagraphItem::Glue { width, stretch, shrink } => {
+                    ParagraphItem::Glue { width, stretch, shrink } if ratio.is_finite() => {
                         let amplitude = if ratio.is_sign_positive() { stretch } else { shrink };
                         let exact_width = width as f32 + ratio * amplitude as f32 + drift;
                         let approx_width = if epsilon.is_sign_positive() {
@@ -1862,7 +1858,7 @@ impl Document for EpubDocument {
     fn chapter<'a>(&mut self, offset: usize, toc: &'a [TocEntry]) -> Option<&'a TocEntry> {
         let next_offset = self.resolve_location(Location::Next(offset))
                               .unwrap_or(usize::max_value());
-        let (index, _) = self.vertebra_coordinates(offset);
+        let (index, _) = self.vertebra_coordinates(offset)?;
         let path = self.spine[index].path.clone();
         let mut chap_before = None;
         let mut chap_after = None;
@@ -1902,14 +1898,14 @@ impl Document for EpubDocument {
 
         match loc {
             Location::Exact(offset) => {
-                let (index, start_offset) = self.vertebra_coordinates(offset);
+                let (index, start_offset) = self.vertebra_coordinates(offset)?;
                 let page_index = self.page_index(offset, index, start_offset)?;
                 self.cache.get(&index)
                     .and_then(|display_list| display_list[page_index].first())
                     .map(|dc| dc.offset())
             },
             Location::Previous(offset) => {
-                let (index, start_offset) = self.vertebra_coordinates(offset);
+                let (index, start_offset) = self.vertebra_coordinates(offset)?;
                 let page_index = self.page_index(offset, index, start_offset)?;
                 if page_index > 0 {
                     self.cache.get(&index)
@@ -1928,7 +1924,7 @@ impl Document for EpubDocument {
                 }
             },
             Location::Next(offset) => {
-                let (index, start_offset) = self.vertebra_coordinates(offset);
+                let (index, start_offset) = self.vertebra_coordinates(offset)?;
                 let page_index = self.page_index(offset, index, start_offset)?;
                 if page_index < self.cache.get(&index).map(|display_list| display_list.len())? - 1 {
                     self.cache.get(&index).and_then(|display_list| display_list[page_index+1].first().map(|dc| dc.offset()))
@@ -1948,7 +1944,7 @@ impl Document for EpubDocument {
             Location::LocalUri(offset, ref uri) => {
                 let mut cache = FnvHashMap::default();
                 let normalized_uri: String = {
-                    let (index, _) = self.vertebra_coordinates(offset);
+                    let (index, _) = self.vertebra_coordinates(offset)?;
                     let path = &self.spine[index].path;
                     if uri.starts_with('#') {
                         format!("{}{}", path, uri)
@@ -1974,7 +1970,7 @@ impl Document for EpubDocument {
         }
 
         let offset = self.resolve_location(loc)?;
-        let (index, start_offset) = self.vertebra_coordinates(offset);
+        let (index, start_offset) = self.vertebra_coordinates(offset)?;
         let page_index = self.page_index(offset, index, start_offset)?;
 
         self.cache.get(&index).map(|display_list| {
@@ -2002,7 +1998,7 @@ impl Document for EpubDocument {
         }
 
         let offset = self.resolve_location(loc)?;
-        let (index, start_offset) = self.vertebra_coordinates(offset);
+        let (index, start_offset) = self.vertebra_coordinates(offset)?;
         let page_index = self.page_index(offset, index, start_offset)?;
 
         self.cache.get(&index).map(|display_list| {
@@ -2027,7 +2023,7 @@ impl Document for EpubDocument {
         }
 
         let offset = self.resolve_location(loc)?;
-        let (index, start_offset) = self.vertebra_coordinates(offset);
+        let (index, start_offset) = self.vertebra_coordinates(offset)?;
 
         let page_index = self.page_index(offset, index, start_offset)?;
         let page = self.cache.get(&index)?.get(page_index)?.clone();
