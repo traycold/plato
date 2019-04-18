@@ -46,7 +46,8 @@ toml = "0.5.0"
 zip = { version = "0.5.2", features = ["deflate"], default-features = false }
 hyphenation = "0.7.1"
 entities = "1.0.1"
-paragraph-breaker = "0.4.2"
+#this has been moved into src tree, to change hard-coded value for max consecutive hyphenated rows
+#paragraph-breaker = "0.4.2"
 rand_xorshift = "0.1.1"
 xi-unicode = "0.1.0"
 
