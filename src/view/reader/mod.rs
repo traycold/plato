@@ -732,6 +732,10 @@ impl Reader {
                                       .and_then(|r| r.line_height)
                                       .unwrap_or(settings.reader.line_height);
                 tool_bar.update_line_height(line_height, hub);
+                let font_var = self.info.reader.as_ref()
+                                      .and_then(|r| r.font_var)
+                                      .unwrap_or(settings.reader.font_var);
+                tool_bar.update_font_var(font_var, hub);
             } else {
                 tool_bar.update_contrast_exponent_slider(self.contrast.exponent, hub);
                 tool_bar.update_contrast_gray_slider(self.contrast.gray, hub);
@@ -1422,6 +1426,34 @@ impl Reader {
         }
     }
 
+    fn toggle_font_var_menu(&mut self, rect: Rectangle, enable: Option<bool>, hub: &Hub, context: &mut Context) {
+        if let Some(index) = locate_by_id(self, ViewId::FontVarMenu) {
+            if let Some(true) = enable {
+                return;
+            }
+
+            hub.send(Event::Expose(*self.child(index).rect(), UpdateMode::Gui)).unwrap();
+            self.children.remove(index);
+        } else {
+            if let Some(false) = enable {
+                return;
+            }
+
+            let font_var = self.info.reader.as_ref()
+                                   .and_then(|r| r.font_var)
+                                   .unwrap_or_else(|| context.settings.reader.font_var);
+            let entries = (1..=13).map(|x| {
+                let fv = 50 + x * 50;
+                EntryKind::RadioButton(format!("{}", fv),
+                                       EntryId::SetFontVar(x),
+                                       (fv - font_var).abs() < 1)
+            }).collect();
+            let font_var_menu = Menu::new(rect, ViewId::FontVarMenu, MenuKind::DropDown, entries, context);
+            hub.send(Event::Render(*font_var_menu.rect(), UpdateMode::Gui)).unwrap();
+            self.children.push(Box::new(font_var_menu) as Box<dyn View>);
+        }
+    }
+
     fn toggle_page_menu(&mut self, rect: Rectangle, enable: Option<bool>, hub: &Hub, context: &mut Context) {
         if let Some(index) = locate_by_id(self, ViewId::PageMenu) {
             if let Some(true) = enable {
@@ -1666,6 +1698,31 @@ impl Reader {
         {
             let mut doc = self.doc.lock().unwrap();
             doc.set_line_height(line_height);
+
+            if !self.synthetic {
+                self.pages_count = doc.pages_count();
+                self.current_page = self.current_page.min(self.pages_count - 1);
+            }
+        }
+
+        self.cache.clear();
+        self.update(None, hub);
+        self.update_tool_bar(hub, context);
+        self.update_bottom_bar(hub);
+    }
+
+    fn set_font_var(&mut self, font_var: i32, hub: &Hub, context: &mut Context) {
+        if Arc::strong_count(&self.doc) > 1 {
+            return;
+        }
+
+        if let Some(ref mut r) = self.info.reader {
+            r.font_var = Some(font_var);
+        }
+
+        {
+            let mut doc = self.doc.lock().unwrap();
+            doc.set_font_var(font_var);
 
             if !self.synthetic {
                 self.pages_count = doc.pages_count();
@@ -2189,6 +2246,10 @@ impl View for Reader {
                 self.toggle_margin_width_menu(rect, None, hub, context);
                 true
             },
+            Event::ToggleNear(ViewId::FontVarMenu, rect) => {
+                self.toggle_font_var_menu(rect, None, hub, context);
+                true
+            },
             Event::ToggleNear(ViewId::LineHeightMenu, rect) => {
                 self.toggle_line_height_menu(rect, None, hub, context);
                 true
@@ -2329,6 +2390,11 @@ impl View for Reader {
             },
             Event::Select(EntryId::SetMarginWidth(width)) => {
                 self.set_margin_width(width, hub, context);
+                true
+            },
+            Event::Select(EntryId::SetFontVar(fv)) => {
+                let font_var = 50 + fv * 50;
+                self.set_font_var(font_var, hub, context);
                 true
             },
             Event::Select(EntryId::SetLineHeight(v)) => {

@@ -247,6 +247,9 @@ impl Document for PdfDocument {
     fn set_margin_width(&mut self, _width: i32) {
     }
 
+    fn set_font_var(&mut self, _font_var: i32) {
+    }
+
     fn set_line_height(&mut self, _line_height: f32) {
     }
 }

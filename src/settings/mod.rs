@@ -16,6 +16,8 @@ pub const DEFAULT_FONT_PATH: &str = "/mnt/onboard/fonts";
 pub const DEFAULT_FONT_SIZE: f32 = 11.0;
 // Default margin width in millimeters
 pub const DEFAULT_MARGIN_WIDTH: i32 = 8;
+// Default font weight
+pub const DEFAULT_FONT_VAR: i32 = 400;
 // Default line height in ems
 pub const DEFAULT_LINE_HEIGHT: f32 = 1.2;
 // Default font family name
@@ -152,6 +154,7 @@ pub struct ReaderSettings {
     pub font_size: f32,
     pub margin_width: i32,
     pub line_height: f32,
+    pub font_var: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -195,6 +198,7 @@ impl Default for ReaderSettings {
             font_size: DEFAULT_FONT_SIZE,
             margin_width: DEFAULT_MARGIN_WIDTH,
             line_height: DEFAULT_LINE_HEIGHT,
+            font_var: DEFAULT_FONT_VAR,
         }
     }
 }

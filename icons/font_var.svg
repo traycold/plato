@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   xmlns:dc="http://purl.org/dc/elements/1.1/"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   height="1392"
+   viewBox="0 0 1056 1392"
+   width="1056"
+   version="1.1"
+   id="svg8"
+   sodipodi:docname="font_var.svg"
+   inkscape:version="0.92.4 (unknown)">
+  <metadata
+     id="metadata14">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:format>image/svg+xml</dc:format>
+        <dc:type
+           rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
+        <dc:title></dc:title>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+  <defs
+     id="defs12" />
+  <sodipodi:namedview
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1"
+     objecttolerance="10"
+     gridtolerance="10"
+     guidetolerance="10"
+     inkscape:pageopacity="0"
+     inkscape:pageshadow="2"
+     inkscape:window-width="1920"
+     inkscape:window-height="1011"
+     id="namedview10"
+     showgrid="false"
+     inkscape:zoom="0.16954023"
+     inkscape:cx="539.79661"
+     inkscape:cy="696"
+     inkscape:window-x="1600"
+     inkscape:window-y="32"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg8" />
+  <path
+     d="M 887.0339,696 869.26607,672 861.90619,662.05859 700.67124,444.26953 675.54352,478.21094 819.01064,672 H 248.78596 L 392.25308,478.21094 367.12537,444.26953 205.89042,662.05859 180.76271,696 367.12537,947.73047 392.25308,913.78906 248.78596,720 H 819.01064 L 675.54352,913.78906 700.67124,947.73047 869.26607,720 Z"
+     id="path2"
+     inkscape:connector-curvature="0"
+     style="stroke-width:0.86042207" />
+  <path
+     d="m48 0h960c26.592 0 48 21.408 48 48s-21.408 48-48 48h-960c-26.592 0-48-21.408-48-48s21.408-48 48-48z"
+     id="path4" />
+  <path
+     d="m48 1296h960c26.592 0 48 21.408 48 48s-21.408 48-48 48h-960c-26.592 0-48-21.408-48-48s21.408-48 48-48z"
+     id="path6" />
+</svg>

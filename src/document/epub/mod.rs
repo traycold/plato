@@ -2064,6 +2064,11 @@ impl Document for EpubDocument {
         }
     }
 
+    fn set_font_var(&mut self, font_var: i32) {
+        //TODO
+        self.cache.clear();
+    }
+
     fn set_line_height(&mut self, line_height: f32) {
         self.line_height = line_height;
         self.cache.clear();

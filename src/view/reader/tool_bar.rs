@@ -30,11 +30,12 @@ impl ToolBar {
         let side = (rect.height() as i32 + thickness) / 2 - thickness;
 
         if reflowable {
-            let mut remaining_width = rect.width() as i32 - 3 * side;
-            let font_family_label_width = remaining_width / 2;
+            let mut remaining_width = rect.width() as i32 - 4 * side;
+            let font_family_label_width = remaining_width * 3 / 8;
             remaining_width -= font_family_label_width;
-            let margin_label_width = remaining_width / 2;
-            let line_height_label_width = remaining_width - margin_label_width;
+            let margin_label_width = remaining_width / 3;
+            let font_var_label_width = remaining_width / 3;
+            let line_height_label_width = remaining_width - margin_label_width - font_var_label_width;
 
             // First row.
 
@@ -58,6 +59,16 @@ impl ToolBar {
                                                     font_family);
             children.push(Box::new(font_family_icon) as Box<dyn View>);
             x_offset += side + font_family_label_width;
+
+            let font_var = reader_info.and_then(|r| r.font_var)
+                                          .unwrap_or(reader_settings.font_var);
+            let font_var_icon = LabeledIcon::new("font_var",
+                                               rect![x_offset, rect.min.y,
+                                                     x_offset + side + font_var_label_width, rect.min.y + side],
+                                               Event::Show(ViewId::FontVarMenu),
+                                               format!("{} fv", font_var));
+            children.push(Box::new(font_var_icon) as Box<dyn View>);
+            x_offset += side + font_var_label_width;
 
             let line_height = reader_info.and_then(|r| r.line_height)
                                          .unwrap_or(reader_settings.line_height);
@@ -211,6 +222,12 @@ impl ToolBar {
         }
     }
 
+    pub fn update_font_var(&mut self, font_var: i32, hub: &Hub) {
+        if let Some(labeled_icon) = self.children[2].downcast_mut::<LabeledIcon>() {
+            labeled_icon.update(format!("{} fv", font_var), hub);
+        }
+    }
+
     pub fn update_font_family(&mut self, font_family: String, hub: &Hub) {
         if let Some(labeled_icon) = self.children[1].downcast_mut::<LabeledIcon>() {
             labeled_icon.update(font_family, hub);
@@ -218,13 +235,13 @@ impl ToolBar {
     }
 
     pub fn update_line_height(&mut self, line_height: f32, hub: &Hub) {
-        if let Some(labeled_icon) = self.children[2].downcast_mut::<LabeledIcon>() {
+        if let Some(labeled_icon) = self.children[3].downcast_mut::<LabeledIcon>() {
             labeled_icon.update(format!("{:.1} em", line_height), hub);
         }
     }
 
     pub fn update_font_size_slider(&mut self, font_size: f32, hub: &Hub) {
-        let slider = self.children[5].as_mut().downcast_mut::<Slider>().unwrap();
+        let slider = self.children[6].as_mut().downcast_mut::<Slider>().unwrap();
         slider.update(font_size, hub);
     }
 
@@ -262,11 +279,12 @@ impl View for ToolBar {
         let mut index = 0;
 
         if self.reflowable {
-            let mut remaining_width = rect.width() as i32 - 3 * side;
+            let mut remaining_width = rect.width() as i32 - 4 * side;
             let font_family_label_width = remaining_width / 2;
             remaining_width -= font_family_label_width;
-            let margin_label_width = remaining_width / 2;
-            let line_height_label_width = remaining_width - margin_label_width;
+            let margin_label_width = remaining_width / 3;
+            let font_var_label_width = remaining_width / 3;
+            let line_height_label_width = remaining_width - margin_label_width - font_var_label_width;
 
             // First row.
 
@@ -282,6 +300,12 @@ impl View for ToolBar {
                                         hub, context);
             index += 1;
             x_offset += side + font_family_label_width;
+
+            self.children[index].resize(rect![x_offset, rect.min.y,
+                                              x_offset + side + font_var_label_width, rect.min.y + side],
+                                        hub, context);
+            index += 1;
+            x_offset += side + font_var_label_width;
 
             self.children[index].resize(rect![x_offset, rect.min.y,
                                               x_offset + side + line_height_label_width, rect.min.y + side],
