@@ -39,6 +39,7 @@ impl ToolBar {
             let font_var_label_width = remaining_width / 3;
             let line_height_label_width = remaining_width - margin_label_width - font_var_label_width;
 
+            println!("thickness:{} side:{} side_x:{} font_family:{} font_var:{} line_height:{}", thickness,side,side_x,font_family_label_width,font_var_label_width,line_height_label_width);
             // First row.
 
             let mut x_offset = rect.min.x;
