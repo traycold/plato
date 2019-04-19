@@ -1,7 +1,8 @@
 use crate::device::CURRENT_DEVICE;
-use crate::framebuffer::Framebuffer;
+use crate::framebuffer::{Framebuffer, UpdateMode};
 use crate::settings::ReaderSettings;
-use crate::metadata::{ReaderInfo, DEFAULT_CONTRAST_EXPONENT, DEFAULT_CONTRAST_GRAY};
+use crate::metadata::{ReaderInfo, TextAlign};
+use crate::metadata::{DEFAULT_CONTRAST_EXPONENT, DEFAULT_CONTRAST_GRAY};
 use crate::view::{View, Event, Hub, Bus, SliderId, ViewId, THICKNESS_MEDIUM};
 use crate::view::filler::Filler;
 use crate::view::slider::Slider;
@@ -30,14 +31,13 @@ impl ToolBar {
         let side = (rect.height() as i32 + thickness) / 2 - thickness;
 
         if reflowable {
-            let side_x = (((rect.height() as i32 + thickness) as f32 / 2.0 - thickness as f32 ) * 2.0 / 3.0).round() as i32;
+            let side_x = (((rect.height() as i32 + thickness) as f32 / 2.0 - thickness as f32 ) * 3.0 / 10.0).round() as i32;
 
-            let mut remaining_width = rect.width() as i32 - 4 * side_x;
-            let font_family_label_width = remaining_width * 3 / 8;
-            remaining_width -= font_family_label_width;
-            let margin_label_width = remaining_width / 3;
-            let font_var_label_width = remaining_width / 3;
-            let line_height_label_width = remaining_width - margin_label_width - font_var_label_width;
+            let remaining_width = rect.width() as i32 - 4 * side_x;
+            let margin_label_width = remaining_width * 5 / 24;
+            let font_var_label_width = remaining_width * 5 / 24;
+            let line_height_label_width = remaining_width * 5 / 24;
+            let font_family_label_width = remaining_width - margin_label_width - font_var_label_width - line_height_label_width;
 
             println!("thickness:{} side:{} side_x:{} font_family:{} font_var:{} line_height:{}", thickness,side,side_x,font_family_label_width,font_var_label_width,line_height_label_width);
             // First row.
@@ -89,16 +89,25 @@ impl ToolBar {
             children.push(Box::new(separator) as Box<dyn View>);
 
             // Start of second row.
+            let text_align = reader_info.and_then(|r| r.text_align)
+                                        .unwrap_or(reader_settings.text_align);
+            let text_align_rect = rect![rect.min.x, rect.max.y - side,
+                                       rect.min.x + side, rect.max.y];
+            let text_align_icon = Icon::new(text_align.icon_name(),
+                                           text_align_rect,
+                                           Event::ToggleNear(ViewId::TextAlignMenu, text_align_rect));
+            children.push(Box::new(text_align_icon) as Box<dyn View>);
+
             let font_size = reader_info.and_then(|r| r.font_size)
                                        .unwrap_or(reader_settings.font_size);
-            let font_size_rect = rect![rect.min.x, rect.max.y - side,
-                                       rect.min.x + side_x, rect.max.y];
+            let font_size_rect = rect![rect.min.x + side, rect.max.y - side,
+                                       rect.min.x + 2 * side_x, rect.max.y];
             let font_size_icon = Icon::new("font_size",
                                            font_size_rect,
                                            Event::ToggleNear(ViewId::FontSizeMenu, font_size_rect));
             children.push(Box::new(font_size_icon) as Box<dyn View>);
 
-            let slider = Slider::new(rect![rect.min.x + side_x, rect.max.y - side,
+            let slider = Slider::new(rect![rect.min.x + 2 * side_x, rect.max.y - side,
                                            rect.max.x - 2 * side_x, rect.max.y],
                                      SliderId::FontSize,
                                      font_size,
@@ -243,6 +252,15 @@ impl ToolBar {
         }
     }
 
+    pub fn update_text_align_icon(&mut self, text_align: TextAlign, hub: &Hub) {
+        let icon = self.child_mut(4).downcast_mut::<Icon>().unwrap();
+        let name = text_align.icon_name();
+        if icon.name != name {
+            icon.name = name.to_string();
+            hub.send(Event::Render(*icon.rect(), UpdateMode::Gui)).unwrap();
+        }
+    }
+
     pub fn update_font_size_slider(&mut self, font_size: f32, hub: &Hub) {
         let slider = self.children[6].as_mut().downcast_mut::<Slider>().unwrap();
         slider.update(font_size, hub);
@@ -324,12 +342,17 @@ impl View for ToolBar {
             index += 1;
 
             // Start of second row.
-            let font_size_rect = rect![rect.min.x, rect.max.y - side,
-                                       rect.min.x + side_x, rect.max.y];
+            let text_align_rect = rect![rect.min.x, rect.max.y - side,
+                                        rect.min.x + side_x, rect.max.y];
+            self.children[index].resize(text_align_rect, hub, context);
+            index += 1;
+
+            let font_size_rect = rect![rect.min.x + side_x, rect.max.y - side,
+                                       rect.min.x + 2 * side_x, rect.max.y];
             self.children[index].resize(font_size_rect, hub, context);
             index += 1;
 
-            self.children[index].resize(rect![rect.min.x + side_x, rect.max.y - side,
+            self.children[index].resize(rect![rect.min.x + 2 * side_x, rect.max.y - side,
                                               rect.max.x - 2 * side_x, rect.max.y],
                                         hub, context);
             index += 1;
