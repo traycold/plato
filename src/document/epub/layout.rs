@@ -19,8 +19,32 @@ pub struct RootData {
 }
 
 #[derive(Debug, Clone)]
+pub struct DrawState {
+    pub position: Point,
+    pub floats: FnvHashMap<usize, Vec<Rectangle>>,
+    pub min_column_widths: Vec<i32>,
+    pub max_column_widths: Vec<i32>,
+    pub column_widths: Vec<i32>,
+    pub center_table: bool,
+}
+
+impl Default for DrawState {
+    fn default() -> Self {
+        DrawState {
+            position: Point::default(),
+            floats: FnvHashMap::default(),
+            min_column_widths: Vec::new(),
+            max_column_widths: Vec::new(),
+            column_widths: Vec::new(),
+            center_table: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct StyleData {
     pub display: Display,
+    pub float: Option<Float>,
     pub width: i32,
     pub height: i32,
     pub margin: Edge,
@@ -44,22 +68,29 @@ pub struct StyleData {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum Float {
+    Left,
+    Right,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Display {
     Block,
     Inline,
+    InlineTable,
     None,
 }
 
 #[derive(Debug, Clone)]
 pub struct ChildArtifact {
     pub sibling_style: SiblingStyle,
-    pub rects: Vec<(usize, Rectangle)>,
+    pub rects: Vec<Option<Rectangle>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct SiblingStyle {
-    pub padding_bottom: i32,
-    pub margin_bottom: i32,
+    pub padding: Edge,
+    pub margin: Edge,
 }
 
 #[derive(Debug, Clone)]
@@ -84,8 +115,8 @@ impl Default for LineStats {
 impl Default for SiblingStyle {
     fn default() -> Self {
         SiblingStyle {
-            padding_bottom: 0,
-            margin_bottom: 0,
+            padding: Edge::default(),
+            margin: Edge::default(),
         }
     }
 }
@@ -115,6 +146,7 @@ impl Default for StyleData {
     fn default() -> Self {
         StyleData {
             display: Display::Block,
+            float: None,
             width: 0,
             height: 0,
             margin: Edge::default(),
@@ -271,7 +303,8 @@ pub struct ImageElement {
     pub scale: f32,
     pub vertical_align: i32,
     pub display: Display,
-    pub edge: Edge,
+    pub margin: Edge,
+    pub float: Option<Float>,
     pub path: String,
     pub uri: Option<String>,
 }
@@ -314,6 +347,14 @@ impl DrawCommand {
             DrawCommand::Text(TextCommand { offset, .. }) => offset,
             DrawCommand::Image(ImageCommand { offset, .. }) => offset,
             DrawCommand::Marker(offset) => offset,
+        }
+    }
+
+    pub fn rect(&self) -> Option<Rectangle> {
+        match *self {
+            DrawCommand::Text(TextCommand { rect, .. }) => Some(rect),
+            DrawCommand::Image(ImageCommand { rect, .. }) => Some(rect),
+            _ => None,
         }
     }
 }

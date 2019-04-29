@@ -1,6 +1,6 @@
 use fnv::FnvHashSet;
 use regex::Regex;
-use super::layout::{FontKind, FontStyle, FontWeight, TextAlign, Display};
+use super::layout::{FontKind, FontStyle, FontWeight, TextAlign, Display, Float};
 use super::layout::{InlineMaterial, GlueMaterial, PenaltyMaterial};
 use crate::geom::Edge;
 use crate::unit::{pt_to_px, pc_to_px, mm_to_px, in_to_px};
@@ -122,13 +122,17 @@ pub fn parse_letter_spacing(value: &str, em: f32, rem: f32, dpi: u16) -> Option<
     }
 }
 
-pub fn parse_vertical_align(value: &str, em: f32, rem: f32, dpi: u16) -> Option<i32> {
+pub fn parse_vertical_align(value: &str, em: f32, rem: f32, line_height: i32, dpi: u16) -> Option<i32> {
     if value == "baseline" {
         Some(0)
     } else if value == "super" {
         Some(pt_to_px(0.4 * em, dpi).round() as i32)
     } else if value == "sub" {
         Some(pt_to_px(-0.2 * em, dpi).round() as i32)
+    } else if value.ends_with('%') {
+        value[..value.len() - 1].parse::<f32>().ok().map(|v| {
+            (v / 100.0 * line_height as f32) as i32
+        })
     } else {
         parse_length(value, em, rem, dpi)
     }
@@ -158,7 +162,16 @@ pub fn parse_display(value: &str) -> Option<Display> {
     match value {
         "block" => Some(Display::Block),
         "inline" => Some(Display::Inline),
+        "inline-table" => Some(Display::InlineTable),
         "none" => Some(Display::None),
+        _ => None,
+    }
+}
+
+pub fn parse_float(value: &str) -> Option<Float> {
+    match value {
+        "left" => Some(Float::Left),
+        "right" => Some(Float::Right),
         _ => None,
     }
 }
@@ -187,9 +200,9 @@ pub fn parse_height(value: &str, em: f32, rem: f32, width: i32, dpi: u16) -> Opt
     }
 }
 
-fn parse_edge_length(value: &str, em: f32, rem: f32, width: i32, dpi: u16) -> i32 {
+fn parse_edge_length(value: &str, em: f32, rem: f32, width: i32, auto_value: i32, dpi: u16) -> i32 {
     if value == "auto" {
-        width
+        auto_value
     } else if value == "0" {
         0
     } else if value.ends_with('%') {
@@ -205,19 +218,19 @@ pub fn parse_edge(top_edge: Option<&str>, right_edge: Option<&str>, bottom_edge:
     let mut e = Edge::default();
 
     if let Some(v) = top_edge {
-        e.top = parse_edge_length(v, em, rem, width, dpi);
+        e.top = parse_edge_length(v, em, rem, width, 0, dpi);
     }
 
     if let Some(v) = right_edge {
-        e.right = parse_edge_length(v, em, rem, width, dpi);
+        e.right = parse_edge_length(v, em, rem, width, width, dpi);
     }
 
     if let Some(v) = bottom_edge {
-        e.bottom = parse_edge_length(v, em, rem, width, dpi);
+        e.bottom = parse_edge_length(v, em, rem, width, 0, dpi);
     }
 
     if let Some(v) = left_edge {
-        e.left = parse_edge_length(v, em, rem, width, dpi);
+        e.left = parse_edge_length(v, em, rem, width, width, dpi);
     }
 
     e
