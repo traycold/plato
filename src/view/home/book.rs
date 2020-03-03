@@ -42,11 +42,11 @@ impl View for Book {
         match *evt {
             Event::Gesture(GestureEvent::Tap(center)) if self.rect.includes(center) => {
                 self.active = true;
-                hub.send(Event::Render(self.rect, UpdateMode::Gui)).unwrap();
-                hub.send(Event::Open(Box::new(self.info.clone()))).unwrap();
+                hub.send(Event::Render(self.rect, UpdateMode::Gui)).ok();
+                hub.send(Event::Open(Box::new(self.info.clone()))).ok();
                 true
             },
-            Event::Gesture(GestureEvent::HoldFinger(center)) if self.rect.includes(center) => {
+            Event::Gesture(GestureEvent::HoldFingerShort(center, ..)) if self.rect.includes(center) => {
                 let pt = pt!(center.x, self.rect.center().y);
                 bus.push_back(Event::ToggleBookMenu(Rectangle::from_point(pt), self.index));
                 true
@@ -54,7 +54,7 @@ impl View for Book {
             Event::Invalid(ref info) => {
                 if self.info.file.path == info.file.path {
                     self.active = false;
-                    hub.send(Event::Render(self.rect, UpdateMode::Gui)).unwrap();
+                    hub.send(Event::Render(self.rect, UpdateMode::Gui)).ok();
                     true
                 } else {
                     false
@@ -64,7 +64,7 @@ impl View for Book {
         }
     }
 
-    fn render(&self, fb: &mut Framebuffer, _rect: Rectangle, fonts: &mut Fonts) -> Rectangle {
+    fn render(&self, fb: &mut dyn Framebuffer, _rect: Rectangle, fonts: &mut Fonts) {
         let dpi = CURRENT_DEVICE.dpi;
 
         let scheme = if self.active {
@@ -189,8 +189,6 @@ impl View for Book {
                          self.rect.max.y - baseline);
             font.render(fb, scheme[1], &plan, pt);
         }
-
-        self.rect
     }
 
     fn rect(&self) -> &Rectangle {

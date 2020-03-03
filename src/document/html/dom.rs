@@ -77,7 +77,7 @@ impl Node {
             Node::Text(TextData { ref text, .. }) |
             Node::Whitespace(TextData { ref text, .. }) => Some(text),
             Node::Element(ElementData { ref children, .. }) if children.len() == 1 => {
-                children.first().and_then(|child| child.text())
+                children.first().and_then(Self::text)
             },
             _ => None,
         }
@@ -91,7 +91,8 @@ impl Node {
                     "span" | "em" | "strong" | "i" | "b" | "img" |
                     "a" | "br" | "code" | "sub" | "sup" | "dfn" |
                     "big" | "small" | "abbr" | "cite" | "var" |
-                    "samp" | "kbd" | "q" | "image" | "svg:image" => true,
+                    "del" | "ins" | "samp" | "kbd" | "q" |
+                    "image" | "svg:image" => true,
                     _ => false,
                 }
             },
@@ -181,7 +182,7 @@ impl Node {
 
     pub fn wrap_lost_inlines(&mut self) {
         if let Node::Element(ElementData { ref mut children, .. }) = self {
-            if children.iter().any(|child| child.is_block()) {
+            if children.iter().any(Self::is_block) {
                 let mut start_index = None;
                 let mut end_index = None;
                 let mut i = 0;

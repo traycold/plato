@@ -1,6 +1,7 @@
 use crate::framebuffer::Framebuffer;
 use crate::font::{Fonts, font_from_style, NORMAL_STYLE};
 use crate::geom::{Rectangle, CornerSpec, BorderSpec, halves, big_half};
+use crate::gesture::GestureEvent;
 use super::{View, Event, Hub, Bus, ViewId, Align};
 use super::{THICKNESS_LARGE, BORDER_RADIUS_MEDIUM};
 use super::common::shift;
@@ -78,25 +79,34 @@ impl NamedInput {
         }
     }
 
-    pub fn set_text(&mut self, text: &str) {
+    pub fn set_text(&mut self, text: &str, hub: &Hub, context: &mut Context) {
         if let Some(input_field) = self.children[1].downcast_mut::<InputField>() {
-            input_field.set_text(text, true);
+            input_field.set_text(text, true, hub, context);
         }
     }
 }
 
 impl View for NamedInput {
-    fn handle_event(&mut self, evt: &Event, _hub: &Hub, bus: &mut Bus, _context: &mut Context) -> bool {
+    fn handle_event(&mut self, evt: &Event, _hub: &Hub, bus: &mut Bus, context: &mut Context) -> bool {
         match *evt {
             Event::Submit(..) => {
                 bus.push_back(Event::Close(self.id));
                 false
             },
+            Event::Gesture(GestureEvent::Tap(center)) | Event::Gesture(GestureEvent::HoldFingerShort(center, _)) => {
+                if !self.rect.includes(center) && !context.kb_rect.includes(center) {
+                    bus.push_back(Event::Close(self.id));
+                    true
+                } else {
+                    self.rect.includes(center)
+                }
+            },
+            Event::Gesture(..) => true,
             _ => false,
         }
     }
 
-    fn render(&self, fb: &mut Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) -> Rectangle {
+    fn render(&self, fb: &mut dyn Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) {
         let dpi = CURRENT_DEVICE.dpi;
         let border_radius = scale_by_dpi(BORDER_RADIUS_MEDIUM, dpi) as i32;
         let border_thickness = scale_by_dpi(THICKNESS_LARGE, dpi) as u16;
@@ -105,7 +115,6 @@ impl View for NamedInput {
                                               &BorderSpec { thickness: border_thickness,
                                                             color: BLACK },
                                               &WHITE);
-        self.rect
     }
 
     fn resize(&mut self, _rect: Rectangle, _hub: &Hub, context: &mut Context) {

@@ -1,15 +1,16 @@
 use std::fs;
 use std::fmt;
 use std::path::{self, Path, PathBuf};
-use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::cmp::Ordering;
+use std::collections::{BTreeSet, BTreeMap};
 use fnv::{FnvHashMap, FnvHashSet};
 use chrono::{Local, DateTime};
 use serde::{Serialize, Deserialize};
 use lazy_static::lazy_static;
 use regex::Regex;
 use failure::{Error, ResultExt};
-use crate::document::Document;
+use crate::document::{Document, SimpleTocEntry, TextLocation};
 use crate::document::epub::EpubDocument;
 use crate::helpers::simple_date_format;
 use crate::settings::{ImportSettings, CategoryProvider};
@@ -18,7 +19,6 @@ use crate::symbolic_path;
 
 pub const METADATA_FILENAME: &str = ".metadata.json";
 pub const IMPORTED_MD_FILENAME: &str = ".metadata-imported.json";
-pub const MATCHES_MD_FILENAME: &str = ".metadata-matches-%Y%m%d_%H%M%S.json";
 pub const TRASH_NAME: &str = ".trash";
 
 pub const DEFAULT_CONTRAST_EXPONENT: f32 = 1.0;
@@ -56,6 +56,8 @@ pub struct Info {
     pub file: FileInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reader: Option<ReaderInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub toc: Option<Vec<SimpleTocEntry>>,
     #[serde(with = "simple_date_format")]
     pub added: DateTime<Local>,
 }
@@ -74,6 +76,29 @@ impl Default for FileInfo {
             path: PathBuf::default(),
             kind: String::default(),
             size: u64::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Annotation {
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub note: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub text: String,
+    pub selection: [TextLocation; 2],
+    #[serde(with = "simple_date_format")]
+    pub modified: DateTime<Local>,
+}
+
+impl Default for Annotation {
+    fn default() -> Self {
+        Annotation {
+            note: String::new(),
+            text: String::new(),
+            selection: [TextLocation::Dynamic(0), TextLocation::Dynamic(1)],
+            modified: Local::now(),
         }
     }
 }
@@ -201,10 +226,12 @@ pub struct ReaderInfo {
     pub contrast_exponent: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contrast_gray: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub first_page: Option<usize>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub page_names: BTreeMap<usize, String>,
     #[serde(skip_serializing_if = "BTreeSet::is_empty")]
     pub bookmarks: BTreeSet<usize>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub annotations: Vec<Annotation>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
@@ -238,8 +265,9 @@ impl Default for ReaderInfo {
             line_height: None,
             contrast_exponent: None,
             contrast_gray: None,
-            first_page: None,
+            page_names: BTreeMap::new(),
             bookmarks: BTreeSet::new(),
+            annotations: Vec::new(),
         }
     }
 }
@@ -262,6 +290,7 @@ impl Default for Info {
             file: FileInfo::default(),
             added: Local::now(),
             reader: None,
+            toc: None,
         }
     }
 }
@@ -392,7 +421,7 @@ impl Info {
 }
 
 pub fn make_query(text: &str) -> Option<Regex> {
-    let any = Regex::new(r"^\.*$").unwrap();
+    let any = Regex::new(r"^(\.*|\s)$").unwrap();
 
     if any.is_match(text) {
         return None;
@@ -447,7 +476,7 @@ impl SortMethod {
         }
     }
 
-    pub fn title(&self) -> String {
+    pub fn title(self) -> String {
         format!("Sort by: {}", self.label())
     }
 }
@@ -590,23 +619,23 @@ pub fn extract_metadata_from_epub(dir: &Path, metadata: &mut Metadata, settings:
 
         let path = dir.join(&info.file.path);
 
-        if let Ok(doc) = EpubDocument::new(&path) {
-            info.title = doc.title().unwrap_or_default();
-            info.author = doc.author().unwrap_or_default();
-            info.year = doc.year().unwrap_or_default();
-            info.publisher = doc.publisher().unwrap_or_default();
-            info.series = doc.series().unwrap_or_default();
-            if !info.series.is_empty() {
-                info.number = doc.series_index().unwrap_or_default();
-            }
-            info.language = doc.language().unwrap_or_default();
-            if info.language == "en" || info.language == "en-US" {
-                info.language.clear();
-            }
-            if subjects_as_categories {
-                info.categories.append(&mut doc.categories());
-            }
-            println!("{}", info.label());
+        match EpubDocument::new(&path) {
+            Ok(doc) => {
+                info.title = doc.title().unwrap_or_default();
+                info.author = doc.author().unwrap_or_default();
+                info.year = doc.year().unwrap_or_default();
+                info.publisher = doc.publisher().unwrap_or_default();
+                info.series = doc.series().unwrap_or_default();
+                if !info.series.is_empty() {
+                    info.number = doc.series_index().unwrap_or_default();
+                }
+                info.language = doc.language().unwrap_or_default();
+                if subjects_as_categories {
+                    info.categories.append(&mut doc.categories());
+                }
+                println!("{}", info.label());
+            },
+            Err(e) => eprintln!("{}: {}", info.file.path.display(), e),
         }
     }
 }
@@ -617,7 +646,7 @@ pub fn extract_metadata_from_filename(metadata: &mut Metadata) {
             continue;
         }
 
-        if let Some(filename) = info.file.path.file_name().and_then(|v| v.to_str()) {
+        if let Some(filename) = info.file.path.file_name().and_then(OsStr::to_str) {
             let mut start_index = 0;
 
             if filename.starts_with('(') {
@@ -656,12 +685,23 @@ pub fn extract_metadata_from_filename(metadata: &mut Metadata) {
 
             if let Some(index) = filename[start_index..].find(')') {
                 info.year = filename[start_index..start_index+index].to_string();
-                start_index += index + 1;
             }
 
             println!("{}", info.label());
         }
     }
+}
+
+pub fn clean_up(dir: &Path, metadata: &mut Metadata) {
+    metadata.retain(|info| {
+        let path = &info.file.path;
+        if !dir.join(path).exists() {
+            println!("{}", path.display());
+            false
+        } else {
+            true
+        }
+    });
 }
 
 fn find_files(root: &Path, dir: &Path, traverse_hidden: bool) -> Result<Vec<FileInfo>, Error> {
@@ -673,13 +713,13 @@ fn find_files(root: &Path, dir: &Path, traverse_hidden: bool) -> Result<Vec<File
 
         if path.is_dir() {
             if let Some(name) = entry.file_name().to_str() {
-                if (!traverse_hidden && name.starts_with(".")) || RESERVED_DIRECTORIES.contains(name) {
+                if (!traverse_hidden && name.starts_with('.')) || RESERVED_DIRECTORIES.contains(name) {
                     continue;
                 }
             }
             result.extend_from_slice(&find_files(root, path.as_path(), traverse_hidden)?);
         } else {
-            if entry.file_name().to_string_lossy().starts_with(".") {
+            if entry.file_name().to_string_lossy().starts_with('.') {
                 continue;
             }
             let relat = path.strip_prefix(root).unwrap().to_path_buf();

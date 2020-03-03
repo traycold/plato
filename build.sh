@@ -2,20 +2,13 @@
 
 set -e
 
-method=${*:-"fast"}
+method=${1:-"fast"}
 
-[ -d libs ] && method=skip
+[ -e libs -a $# -eq 0 ] && method=skip
 
 case "$method" in
 	fast)
-		version=$(cargo pkgid | cut -d '#' -f 2)
-		archive="plato-${version}.zip"
-		info_url="https://github.com/baskerville/plato/releases/tag/${version}"
-		echo "Downloading ${archive}."
-		release_url=$(wget -q -O - "$info_url" | grep -Eo "https[^\"]+files[^\"]+${archive}")
-		wget -q "$release_url"
-		unzip "$archive" 'libs/*' 'bin/*' 'hyphenation-patterns/*'
-		rm "$archive"
+		./download.sh 'libs/*'
 		cd libs
 		
 		ln -s libz.so.1 libz.so
@@ -32,15 +25,16 @@ case "$method" in
 		ln -s libdjvulibre.so.21 libdjvulibre.so
 		;;
 	slow)
+		shift
 		cd thirdparty
-		./download.sh
-		./build.sh
+		./download.sh "$@"
+		./build.sh "$@"
 		cd ..
 		cd src/wrapper
 		./build-kobo.sh
 		cd ../..
 
-		mkdir libs
+		[ -e libs ] || mkdir libs
 
 		cp thirdparty/zlib/libz.so libs
 		cp thirdparty/bzip2/libbz2.so libs

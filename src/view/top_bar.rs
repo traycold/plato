@@ -72,19 +72,19 @@ impl TopBar {
     pub fn update_root_icon(&mut self, icon_name: &str, hub: &Hub) {
         let icon = self.child_mut(0).downcast_mut::<Icon>().unwrap();
         icon.name = icon_name.to_string();
-        hub.send(Event::Render(*icon.rect(), UpdateMode::Gui)).unwrap();
+        hub.send(Event::Render(*icon.rect(), UpdateMode::Gui)).ok();
     }
 
     pub fn update_title_label(&mut self, title: &str, hub: &Hub) {
         let title_label = self.children[1].as_mut().downcast_mut::<Label>().unwrap();
-        title_label.update(title.to_string(), hub);
+        title_label.update(title, hub);
     }
 
     pub fn update_frontlight_icon(&mut self, hub: &Hub, context: &mut Context) {
         let name = if context.settings.frontlight { "frontlight" } else { "frontlight-disabled" };
         let icon = self.child_mut(4).downcast_mut::<Icon>().unwrap();
         icon.name = name.to_string();
-        hub.send(Event::Render(*icon.rect(), UpdateMode::Gui)).unwrap();
+        hub.send(Event::Render(*icon.rect(), UpdateMode::Gui)).ok();
     }
 }
 
@@ -92,15 +92,14 @@ impl View for TopBar {
     fn handle_event(&mut self, evt: &Event, _hub: &Hub, _bus: &mut Bus, _context: &mut Context) -> bool {
         match *evt {
             Event::Gesture(GestureEvent::Tap(center)) |
-            Event::Gesture(GestureEvent::HoldFinger(center)) if self.rect.includes(center) => true,
+            Event::Gesture(GestureEvent::HoldFingerShort(center, ..)) if self.rect.includes(center) => true,
             Event::Gesture(GestureEvent::Swipe { start, .. }) if self.rect.includes(start) => true,
             Event::Device(DeviceEvent::Finger { position, .. }) if self.rect.includes(position) => true,
             _ => false,
         }
     }
 
-    fn render(&self, _fb: &mut Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) -> Rectangle {
-        self.rect
+    fn render(&self, _fb: &mut dyn Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) {
     }
 
     fn resize(&mut self, rect: Rectangle, hub: &Hub, context: &mut Context) {

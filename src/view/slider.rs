@@ -52,7 +52,7 @@ impl Slider {
     pub fn update(&mut self, value: f32, hub: &Hub) {
         if (self.value - value).abs() >= f32::EPSILON {
             self.value = value;
-            hub.send(Event::Render(self.rect, UpdateMode::Gui)).unwrap();
+            hub.send(Event::Render(self.rect, UpdateMode::Gui)).ok();
         }
     }
 }
@@ -65,14 +65,14 @@ impl View for Slider {
                     FingerStatus::Down if self.rect.includes(position) => {
                         self.active = true;
                         self.update_value(position.x);
-                        hub.send(Event::Render(self.rect, UpdateMode::Gui)).unwrap();
+                        hub.send(Event::Render(self.rect, UpdateMode::Gui)).ok();
                         bus.push_back(Event::Slider(self.id, self.value, status));
                         self.last_x = position.x;
                         true
                     },
                     FingerStatus::Motion if self.active && position.x != self.last_x => {
                         self.update_value(position.x);
-                        hub.send(Event::RenderNoWait(self.rect, UpdateMode::FastMono)).unwrap();
+                        hub.send(Event::RenderNoWait(self.rect, UpdateMode::FastMono)).ok();
                         bus.push_back(Event::Slider(self.id, self.value, status));
                         self.last_x = position.x;
                         true
@@ -83,7 +83,7 @@ impl View for Slider {
                             self.update_value(position.x);
                             self.last_x = position.x;
                         }
-                        hub.send(Event::Render(self.rect, UpdateMode::Gui)).unwrap();
+                        hub.send(Event::Render(self.rect, UpdateMode::Gui)).ok();
                         bus.push_back(Event::Slider(self.id, self.value, status));
                         true
                     },
@@ -94,7 +94,7 @@ impl View for Slider {
         }
     }
 
-    fn render(&self, fb: &mut Framebuffer, _rect: Rectangle, fonts: &mut Fonts) -> Rectangle {
+    fn render(&self, fb: &mut dyn Framebuffer, _rect: Rectangle, fonts: &mut Fonts) {
         let dpi = CURRENT_DEVICE.dpi;
         let progress_height = scale_by_dpi(PROGRESS_HEIGHT, dpi) as i32;
         let button_diameter = scale_by_dpi(BUTTON_DIAMETER, dpi) as i32;
@@ -142,7 +142,6 @@ impl View for Slider {
 
         let pt = pt!(x_offset + x_drift, self.rect.min.y + x_height.max(small_padding));
         font.render(fb, PROGRESS_VALUE, &plan, pt);
-        self.rect
     }
 
     fn rect(&self) -> &Rectangle {

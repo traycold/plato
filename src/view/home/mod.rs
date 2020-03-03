@@ -18,13 +18,13 @@ use serde_json::Value as JsonValue;
 use fnv::{FnvHashSet, FnvHashMap};
 use failure::{Error, format_err};
 use crate::framebuffer::{Framebuffer, UpdateMode};
-use crate::metadata::{Info, Metadata, SortMethod, SimpleStatus, sort, make_query};
+use crate::metadata::{Info, ReaderInfo, Metadata, SortMethod, SimpleStatus, sort, make_query, auto_import, clean_up};
 use crate::view::{View, Event, Hub, Bus, ViewId, EntryId, EntryKind, THICKNESS_MEDIUM};
 use crate::settings::{Hook, SecondColumn};
 use crate::view::filler::Filler;
-use crate::view::common::{shift, locate, locate_by_id};
+use crate::view::common::{locate, locate_by_id};
 use crate::view::common::{toggle_main_menu, toggle_battery_menu, toggle_clock_menu};
-use crate::view::keyboard::{Keyboard, DEFAULT_LAYOUT};
+use crate::view::keyboard::Keyboard;
 use crate::view::named_input::NamedInput;
 use crate::view::menu::{Menu, MenuKind};
 use crate::view::menu_entry::MenuEntry;
@@ -171,7 +171,7 @@ impl Home {
                                         false);
         children.push(Box::new(bottom_bar) as Box<dyn View>);
 
-        hub.send(Event::Render(rect, UpdateMode::Full)).unwrap();
+        hub.send(Event::Render(rect, UpdateMode::Full)).ok();
 
         Ok(Home {
             rect,
@@ -255,27 +255,30 @@ impl Home {
         }
     }
 
+    fn terminate_fetchers(&mut self, categ: &str, hub: &Hub) {
+        self.background_fetchers.retain(|name, fetcher| {
+            if name == categ {
+                if let Some(process) = fetcher.process.as_mut() {
+                    unsafe { libc::kill(process.id() as libc::pid_t, libc::SIGTERM) };
+                    process.wait().ok();
+                }
+                if let Some(sort_method) = fetcher.sort_method {
+                    hub.send(Event::Select(EntryId::Sort(sort_method))).ok();
+                }
+                if let Some(second_column) = fetcher.second_column {
+                    hub.send(Event::Select(EntryId::SecondColumn(second_column))).ok();
+                }
+                false
+            } else {
+                true
+            }
+        });
+    }
+
     fn toggle_select_category(&mut self, categ: &str, hub: &Hub, context: &mut Context) {
         if self.selected_categories.contains(categ) {
             self.selected_categories.remove(categ);
-
-            self.background_fetchers.retain(|name, fetcher| {
-                if name == categ {
-                    if let Some(process) = fetcher.process.as_mut() {
-                        unsafe { libc::kill(process.id() as libc::pid_t, libc::SIGTERM) };
-                        process.wait().ok();
-                    }
-                    if let Some(sort_method) = fetcher.sort_method {
-                        hub.send(Event::Select(EntryId::Sort(sort_method))).unwrap();
-                    }
-                    if let Some(second_column) = fetcher.second_column {
-                        hub.send(Event::Select(EntryId::SecondColumn(second_column))).unwrap();
-                    }
-                    false
-                } else {
-                    true
-                }
-            });
+            self.terminate_fetchers(categ, hub);
         } else {
             self.selected_categories = self.selected_categories.iter().filter_map(|s| {
                 if s.is_descendant_of(categ) || categ.is_descendant_of(s) {
@@ -307,10 +310,10 @@ impl Home {
         let mut sort_method = hook.sort_method;
         let mut second_column = hook.second_column;
         if let Some(sort_method) = sort_method.replace(self.sort_method) {
-            hub.send(Event::Select(EntryId::Sort(sort_method))).unwrap();
+            hub.send(Event::Select(EntryId::Sort(sort_method))).ok();
         }
         if let Some(second_column) = second_column.replace(context.settings.home.second_column) {
-            hub.send(Event::Select(EntryId::SecondColumn(second_column))).unwrap();
+            hub.send(Event::Select(EntryId::SecondColumn(second_column))).ok();
         }
         let process = hook.program.as_ref().and_then(|p| {
             self.spawn_child(&hook.name, p, context.settings.wifi, context.online, hub)
@@ -339,26 +342,26 @@ impl Home {
             for line_res in reader.lines() {
                 if let Ok(line) = line_res {
                     if let Ok(event) = serde_json::from_str::<JsonValue>(&line) {
-                        match event.get("type").and_then(|v| v.as_str()) {
+                        match event.get("type").and_then(JsonValue::as_str) {
                             Some("notify") => {
-                                if let Some(msg) = event.get("message").and_then(|v| v.as_str()) {
-                                    hub2.send(Event::Notify(msg.to_string())).unwrap();
+                                if let Some(msg) = event.get("message").and_then(JsonValue::as_str) {
+                                    hub2.send(Event::Notify(msg.to_string())).ok();
                                 }
                             },
                             Some("addDocument") => {
-                                if let Some(info) = event.get("info").map(|v| v.to_string())
+                                if let Some(info) = event.get("info").map(ToString::to_string)
                                                          .and_then(|v| serde_json::from_str(&v).ok()) {
-                                    hub2.send(Event::AddDocument(Box::new(info))).unwrap();
+                                    hub2.send(Event::AddDocument(Box::new(info))).ok();
                                 }
                             },
                             Some("removeDocument") => {
-                                if let Some(path) = event.get("path").and_then(|v| v.as_str()) {
-                                    hub2.send(Event::RemoveDocument(PathBuf::from(path))).unwrap();
+                                if let Some(path) = event.get("path").and_then(JsonValue::as_str) {
+                                    hub2.send(Event::RemoveDocument(PathBuf::from(path))).ok();
                                 }
                             },
                             Some("setWifi") => {
-                                if let Some(enable) = event.get("enable").and_then(|v| v.as_bool()) {
-                                    hub2.send(Event::SetWifi(enable)).unwrap();
+                                if let Some(enable) = event.get("enable").and_then(JsonValue::as_bool) {
+                                    hub2.send(Event::SetWifi(enable)).ok();
                                 }
                             },
                             _ => (),
@@ -372,7 +375,7 @@ impl Home {
         Ok(process)
     }
 
-    fn toggle_negate_category(&mut self, categ: &str) {
+    fn toggle_negate_category(&mut self, categ: &str, hub: &Hub) {
         if self.negated_categories.contains(categ) {
             self.negated_categories.remove(categ);
         } else {
@@ -383,18 +386,23 @@ impl Home {
                     Some(s.clone())
                 }
             }).collect();
+            let mut deselected_categories = Vec::new();
             self.selected_categories = self.selected_categories.iter().filter_map(|s| {
                 if s == categ || s.is_descendant_of(categ) {
+                    deselected_categories.push(s.clone());
                     None
                 } else {
                     Some(s.clone())
                 }
             }).collect();
+            for s in deselected_categories {
+                self.terminate_fetchers(&s, hub);
+            }
             self.negated_categories.insert(categ.to_string());
         }
     }
 
-    fn toggle_negate_category_children(&mut self, parent: &str) {
+    fn toggle_negate_category_children(&mut self, parent: &str, hub: &Hub) {
         let mut children = Vec::new();
 
         for c in &self.visible_categories {
@@ -404,7 +412,7 @@ impl Home {
         }
 
         while let Some(c) = children.pop() {
-            self.toggle_negate_category(&c);
+            self.toggle_negate_category(&c, hub);
         }
     }
 
@@ -419,7 +427,7 @@ impl Home {
 
     fn go_to_neighbor(&mut self, dir: CycleDir, hub: &Hub, context: &Context) {
         match dir {
-            CycleDir::Next if self.current_page < self.pages_count - 1 => {
+            CycleDir::Next if self.current_page < self.pages_count.saturating_sub(1) => {
                 self.current_page += 1;
             },
             CycleDir::Previous if self.current_page > 0 => {
@@ -515,25 +523,25 @@ impl Home {
                 return;
             }
 
-            let kb_rect = *self.child(index).rect();
+            let y_min = self.child(5).rect().min.y;
+            let mut rect = *self.child(index).rect();
+            rect.absorb(self.child(index-1).rect());
 
-            self.children.drain(index - 1 .. index + 1);
+            self.children.drain(index - 1 ..= index);
 
-            let delta_y = kb_rect.height() as i32 + thickness;
+            let delta_y = rect.height() as i32;
 
             if index > 6 {
                 has_search_bar = true;
-                {
-                    let separator = self.child_mut(5).downcast_mut::<Filler>().unwrap();
-                    separator.rect += pt!(0, delta_y);
-                }
-                {
-                    shift(self.child_mut(6), pt!(0, delta_y));
+                for i in 5..=6 {
+                    let shifted_rect = *self.child(i).rect() + pt!(0, delta_y);
+                    self.child_mut(i).resize(shifted_rect, hub, context);
                 }
             }
 
-            hub.send(Event::Focus(None)).unwrap();
-            hub.send(Event::Expose(kb_rect, UpdateMode::Gui)).unwrap();
+            hub.send(Event::Focus(None)).ok();
+            let rect = rect![self.rect.min.x, y_min, self.rect.max.x, y_min + delta_y];
+            hub.send(Event::Expose(rect, UpdateMode::Gui)).ok();
         } else {
             if !enable {
                 return;
@@ -550,7 +558,7 @@ impl Home {
                 _ => false,
             };
 
-            let keyboard = Keyboard::new(&mut kb_rect, DEFAULT_LAYOUT.clone(), number, context);
+            let keyboard = Keyboard::new(&mut kb_rect, number, context);
             self.children.insert(index, Box::new(keyboard) as Box<dyn View>);
 
             let separator = Filler::new(rect![self.rect.min.x, kb_rect.min.y - thickness,
@@ -562,12 +570,9 @@ impl Home {
 
             if index > 5 {
                 has_search_bar = true;
-                {
-                    let separator = self.child_mut(5).downcast_mut::<Filler>().unwrap();
-                    separator.rect -= pt!(0, delta_y);
-                }
-                {
-                    shift(self.child_mut(6), pt!(0, -delta_y));
+                for i in 5..=6 {
+                    let shifted_rect = *self.child(i).rect() + pt!(0, -delta_y);
+                    self.child_mut(i).resize(shifted_rect, hub, context);
                 }
             }
         }
@@ -576,17 +581,17 @@ impl Home {
             if enable {
                 if has_search_bar {
                     for i in 5..9 {
-                        hub.send(Event::Render(*self.child(i).rect(), UpdateMode::Gui)).unwrap();
+                        hub.send(Event::Render(*self.child(i).rect(), UpdateMode::Gui)).ok();
                     }
                 } else {
                     for i in 5..7 {
-                        hub.send(Event::Render(*self.child(i).rect(), UpdateMode::Gui)).unwrap();
+                        hub.send(Event::Render(*self.child(i).rect(), UpdateMode::Gui)).ok();
                     }
                 }
             } else {
                 if has_search_bar {
                     for i in 5..7 {
-                        hub.send(Event::Render(*self.child(i).rect(), UpdateMode::Gui)).unwrap();
+                        hub.send(Event::Render(*self.child(i).rect(), UpdateMode::Gui)).ok();
                     }
                 }
             }
@@ -606,11 +611,11 @@ impl Home {
                 return;
             }
 
-            if let Some(ViewId::SearchInput) = self.focus {
-                self.toggle_keyboard(false, false, Some(ViewId::SearchInput), hub, context);
+            if let Some(ViewId::HomeSearchInput) = self.focus {
+                self.toggle_keyboard(false, false, Some(ViewId::HomeSearchInput), hub, context);
             }
 
-            self.children.drain(index - 1 .. index + 1);
+            self.children.drain(index - 1 ..= index);
 
             {
                 let shelf = self.child_mut(4).downcast_mut::<Shelf>().unwrap();
@@ -632,8 +637,9 @@ impl Home {
             let search_bar = SearchBar::new(rect![self.rect.min.x, sp_rect.max.y,
                                                   self.rect.max.x,
                                                   sp_rect.max.y + delta_y - thickness],
+                                            ViewId::HomeSearchInput,
                                             "Title, author, category",
-                                            "");
+                                            "", context);
 
             self.children.insert(5, Box::new(search_bar) as Box<dyn View>);
 
@@ -647,10 +653,10 @@ impl Home {
             }
 
             if locate::<Keyboard>(self).is_none() {
-                self.toggle_keyboard(true, false, Some(ViewId::SearchInput), hub, context);
+                self.toggle_keyboard(true, false, Some(ViewId::HomeSearchInput), hub, context);
             }
 
-            hub.send(Event::Focus(Some(ViewId::SearchInput))).unwrap();
+            hub.send(Event::Focus(Some(ViewId::HomeSearchInput))).ok();
 
             self.resize_summary(0, false, hub, context);
             search_visible = true;
@@ -660,11 +666,11 @@ impl Home {
             if search_visible {
                 // TODO: don't update if the keyboard is already present
                 for i in [3usize, 5, 6, 7, 8].iter().cloned() {
-                    hub.send(Event::Render(*self.child(i).rect(), UpdateMode::Gui)).unwrap();
+                    hub.send(Event::Render(*self.child(i).rect(), UpdateMode::Gui)).ok();
                 }
             } else {
                 for i in [3usize, 5].iter().cloned() {
-                    hub.send(Event::Render(*self.child(i).rect(), UpdateMode::Gui)).unwrap();
+                    hub.send(Event::Render(*self.child(i).rect(), UpdateMode::Gui)).ok();
                 }
             }
 
@@ -684,7 +690,7 @@ impl Home {
             if let Some(true) = enable {
                 return;
             }
-            hub.send(Event::Expose(*self.child(index).rect(), UpdateMode::Gui)).unwrap();
+            hub.send(Event::Expose(*self.child(index).rect(), UpdateMode::Gui)).ok();
             self.children.remove(index);
             if let Some(ViewId::GoToPageInput) = self.focus {
                 self.toggle_keyboard(false, true, Some(ViewId::GoToPageInput), hub, context);
@@ -693,12 +699,15 @@ impl Home {
             if let Some(false) = enable {
                 return;
             }
+            if self.pages_count < 2 {
+                return;
+            }
             let go_to_page = NamedInput::new("Go to page".to_string(),
                                              ViewId::GoToPage,
                                              ViewId::GoToPageInput,
                                              4, context);
-            hub.send(Event::Render(*go_to_page.rect(), UpdateMode::Gui)).unwrap();
-            hub.send(Event::Focus(Some(ViewId::GoToPageInput))).unwrap();
+            hub.send(Event::Render(*go_to_page.rect(), UpdateMode::Gui)).ok();
+            hub.send(Event::Focus(Some(ViewId::GoToPageInput))).ok();
             self.children.push(Box::new(go_to_page) as Box<dyn View>);
         }
     }
@@ -708,7 +717,7 @@ impl Home {
             if let Some(true) = enable {
                 return;
             }
-            hub.send(Event::Expose(*self.child(index).rect(), UpdateMode::Gui)).unwrap();
+            hub.send(Event::Expose(*self.child(index).rect(), UpdateMode::Gui)).ok();
             self.children.remove(index);
         } else {
             if let Some(false) = enable {
@@ -736,7 +745,7 @@ impl Home {
                                EntryKind::CheckBox("Reverse Order".to_string(),
                                                    EntryId::ReverseOrder, self.reverse_order)];
             let sort_menu = Menu::new(rect, ViewId::SortMenu, MenuKind::DropDown, entries, context);
-            hub.send(Event::Render(*sort_menu.rect(), UpdateMode::Gui)).unwrap();
+            hub.send(Event::Render(*sort_menu.rect(), UpdateMode::Gui)).ok();
             self.children.push(Box::new(sort_menu) as Box<dyn View>);
         }
     }
@@ -752,7 +761,7 @@ impl Home {
             if let Some(true) = enable {
                 return;
             }
-            hub.send(Event::Expose(*self.child(index).rect(), UpdateMode::Gui)).unwrap();
+            hub.send(Event::Expose(*self.child(index).rect(), UpdateMode::Gui)).ok();
             self.children.remove(index);
         } else {
             if let Some(false) = enable {
@@ -763,24 +772,31 @@ impl Home {
             let info = &self.visible_books[book_index];
             let path = &info.file.path;
 
-            let categories = info.categories.iter()
-                                  .map(|c| EntryKind::Command(c.to_string(),
-                                                              EntryId::RemoveBookCategory(path.clone(),
-                                                                                          c.to_string())))
-                                  .collect::<Vec<EntryKind>>();
-
             let mut entries = vec![EntryKind::Command("Add Categories".to_string(),
                                                       EntryId::AddBookCategories(path.clone()))];
 
-            if !categories.is_empty() {
-                entries.push(EntryKind::SubMenu("Remove Category".to_string(), categories));
+            if !info.categories.is_empty() {
+                let remove_categories =
+                    info.categories.iter()
+                        .map(|c| EntryKind::Command(c.to_string(),
+                                                    EntryId::RemoveBookCategory(path.clone(),
+                                                                                c.to_string())))
+                        .collect::<Vec<EntryKind>>();
+                let toggle_categories =
+                    info.categories.iter()
+                        .map(|c| EntryKind::Command(c.to_string(),
+                                                    EntryId::ToggleSelectCategory(c.to_string())))
+                        .collect::<Vec<EntryKind>>();
+
+                entries.push(EntryKind::SubMenu("Remove Category".to_string(), remove_categories));
+                entries.push(EntryKind::SubMenu("Toggle Category".to_string(), toggle_categories));
             }
 
             entries.push(EntryKind::Separator);
 
             let submenu: &[SimpleStatus] = match info.simple_status() {
-                SimpleStatus::Reading => &[SimpleStatus::New, SimpleStatus::Finished],
                 SimpleStatus::New => &[SimpleStatus::Finished],
+                SimpleStatus::Reading => &[SimpleStatus::New, SimpleStatus::Finished],
                 SimpleStatus::Finished => &[SimpleStatus::New],
             };
 
@@ -807,7 +823,7 @@ impl Home {
             entries.push(EntryKind::Command("Remove".to_string(), EntryId::Remove(path.clone())));
 
             let book_menu = Menu::new(rect, ViewId::BookMenu, MenuKind::Contextual, entries, context);
-            hub.send(Event::Render(*book_menu.rect(), UpdateMode::Gui)).unwrap();
+            hub.send(Event::Render(*book_menu.rect(), UpdateMode::Gui)).ok();
             self.children.push(Box::new(book_menu) as Box<dyn View>);
         }
     }
@@ -817,7 +833,7 @@ impl Home {
             if let Some(true) = enable {
                 return;
             }
-            hub.send(Event::Expose(*self.child(index).rect(), UpdateMode::Gui)).unwrap();
+            hub.send(Event::Expose(*self.child(index).rect(), UpdateMode::Gui)).ok();
             self.children.remove(index);
         } else {
             if let Some(false) = enable {
@@ -832,7 +848,7 @@ impl Home {
                                                   EntryId::RemoveCategory(categ.to_string()))];
 
             let category_menu = Menu::new(rect, ViewId::CategoryMenu, MenuKind::Contextual, entries, context);
-            hub.send(Event::Render(*category_menu.rect(), UpdateMode::Gui)).unwrap();
+            hub.send(Event::Render(*category_menu.rect(), UpdateMode::Gui)).ok();
             self.children.push(Box::new(category_menu) as Box<dyn View>);
         }
     }
@@ -843,7 +859,7 @@ impl Home {
                 return;
             }
 
-            hub.send(Event::Expose(*self.child(index).rect(), UpdateMode::Gui)).unwrap();
+            hub.send(Event::Expose(*self.child(index).rect(), UpdateMode::Gui)).ok();
             self.children.remove(index);
         } else {
             if let Some(false) = enable {
@@ -858,7 +874,9 @@ impl Home {
             }).unwrap_or_default();
 
 
-            let mut entries = vec![EntryKind::Command("Export As".to_string(), EntryId::ExportMatches)];
+            let mut entries = vec![EntryKind::Command("Save".to_string(), EntryId::Save),
+                                   EntryKind::Command("Save As".to_string(), EntryId::SaveAs),
+                                   EntryKind::Command("Import".to_string(), EntryId::Import)];
 
             if !loadables.is_empty() {
                 entries.push(EntryKind::SubMenu("Load".to_string(),
@@ -866,8 +884,19 @@ impl Home {
                                                                                                  EntryId::Load(e))).collect()));
             }
 
-            if !self.visible_books.is_empty() {
+            entries.push(EntryKind::Command("Reload".to_string(), EntryId::Reload));
+            entries.push(EntryKind::Command("Clean Up".to_string(), EntryId::CleanUp));
+
+            let hooks: Vec<EntryKind> =
+                context.settings.home.hooks.iter()
+                       .map(|v| EntryKind::Command(v.name.clone(),
+                                                   EntryId::ToggleSelectCategory(v.name.clone()))).collect();
+
+            if !self.visible_books.is_empty() || !hooks.is_empty() {
                 entries.push(EntryKind::Separator);
+            }
+
+            if !self.visible_books.is_empty() {
                 entries.push(EntryKind::Command("Add Categories".to_string(), EntryId::AddMatchesCategories));
                 let categories: BTreeSet<String> = self.visible_books.iter().flat_map(|info| info.categories.clone()).collect();
                 let categories: Vec<EntryKind> = categories.iter().map(|c| EntryKind::Command(c.clone(), EntryId::RemoveCategory(c.clone()))).collect();
@@ -877,14 +906,12 @@ impl Home {
                 }
             }
 
-            entries.push(EntryKind::Separator);
-            let hooks: Vec<EntryKind> =
-                context.settings.home.hooks.iter()
-                       .map(|v| EntryKind::Command(v.name.clone(),
-                                                   EntryId::ToggleSelectCategory(v.name.clone()))).collect();
             if !hooks.is_empty() {
-                entries.push(EntryKind::SubMenu("Hooks".to_string(), hooks));
+                entries.push(EntryKind::SubMenu("Toggle Hook".to_string(), hooks));
             }
+
+            entries.push(EntryKind::Separator);
+
             let status_filter = self.status_filter;
             entries.push(EntryKind::SubMenu("Show".to_string(),
                 vec![EntryKind::RadioButton("All".to_string(), EntryId::StatusFilter(None), status_filter == None),
@@ -897,20 +924,24 @@ impl Home {
                 vec![EntryKind::RadioButton("Progress".to_string(), EntryId::SecondColumn(SecondColumn::Progress), second_column == SecondColumn::Progress),
                      EntryKind::RadioButton("Year".to_string(), EntryId::SecondColumn(SecondColumn::Year), second_column == SecondColumn::Year)]));
 
-            entries.push(EntryKind::Separator);
+            if !self.visible_books.is_empty() || !self.history.is_empty() || !trash::is_empty(context) {
+                entries.push(EntryKind::Separator);
+            }
 
             if !trash::is_empty(context) {
                 entries.push(EntryKind::Command("Empty Trash".to_string(), EntryId::EmptyTrash));
             }
 
-            entries.push(EntryKind::Command("Remove".to_string(), EntryId::RemoveMatches));
+            if !self.visible_books.is_empty() {
+                entries.push(EntryKind::Command("Remove".to_string(), EntryId::RemoveMatches));
+            }
 
             if !self.history.is_empty() {
                 entries.push(EntryKind::Command("Undo".to_string(), EntryId::Undo));
             }
 
             let matches_menu = Menu::new(rect, ViewId::MatchesMenu, MenuKind::DropDown, entries, context);
-            hub.send(Event::Render(*matches_menu.rect(), UpdateMode::Gui)).unwrap();
+            hub.send(Event::Render(*matches_menu.rect(), UpdateMode::Gui)).ok();
             self.children.push(Box::new(matches_menu) as Box<dyn View>);
         }
     }
@@ -968,7 +999,7 @@ impl Home {
         }
 
         if update {
-            hub.send(Event::Render(*self.child(3).rect(), UpdateMode::Gui)).unwrap();
+            hub.send(Event::Render(*self.child(3).rect(), UpdateMode::Gui)).ok();
             self.update_summary(true, hub, &mut context.fonts);
             self.update_shelf(true, hub, context);
             self.update_bottom_bar(hub);
@@ -987,7 +1018,7 @@ impl Home {
         if let Some(entry) = self.history.pop_back() {
             context.metadata = entry.metadata;
             if entry.restore_books {
-                untrash(context).map_err(|e| eprintln!("Couldn't restore books from trash: {}", e)).ok();
+                untrash(context).map_err(|e| eprintln!("Can't restore books from trash: {}", e)).ok();
             }
             sort(&mut context.metadata, self.sort_method, self.reverse_order);
             self.refresh_visibles(true, false, hub, context);
@@ -1000,6 +1031,7 @@ impl Home {
         if trash(&paths, context).map_err(|e| eprintln!("Can't trash matches: {}", e)).is_ok() {
             self.history_push(true, context);
             context.metadata.retain(|info| !paths.contains(&info.file.path));
+            context.settings.intermission_images.retain(|_, path| !paths.contains(path));
             self.refresh_visibles(true, false, hub, context);
         }
     }
@@ -1114,6 +1146,7 @@ impl Home {
         if trash(&paths, context).map_err(|e| eprintln!("Can't trash {}: {}", path.display(), e)).is_ok() {
             self.history_push(true, context);
             context.metadata.retain(|info| info.file.path != *path);
+            context.settings.intermission_images.retain(|_, path| !paths.contains(path));
             self.refresh_visibles(true, false, hub, context);
         }
     }
@@ -1157,7 +1190,14 @@ impl Home {
                 if status == SimpleStatus::New {
                     info.reader = None;
                 } else {
-                    info.reader.as_mut().map(|info| info.finished = true);
+                    if let Some(r) = info.reader.as_mut() {
+                        r.finished = true;
+                    } else {
+                        info.reader = Some(ReaderInfo {
+                            finished: true,
+                            .. Default::default()
+                        });
+                    }
                 }
                 break;
             }
@@ -1210,26 +1250,29 @@ impl Home {
         if let Some(top_bar) = self.child_mut(0).downcast_mut::<TopBar>() {
             top_bar.update_frontlight_icon(&tx, context);
         }
-        hub.send(Event::ClockTick).unwrap();
-        hub.send(Event::BatteryTick).unwrap();
-        hub.send(Event::Render(self.rect, UpdateMode::Gui)).unwrap();
+        hub.send(Event::ClockTick).ok();
+        hub.send(Event::BatteryTick).ok();
+        hub.send(Event::Render(self.rect, UpdateMode::Gui)).ok();
     }
 
-    fn export_matches(&mut self, filename: &str, context: &mut Context) {
-        let path = context.settings.library_path.join(format!(".metadata-{}.json", filename));
+    fn save_as(&mut self, filename: Option<&str>, context: &mut Context) {
+        let path = if let Some(filename) = filename.as_ref() {
+            context.settings.library_path.join(format!(".metadata-{}.json", filename))
+        } else {
+            context.settings.library_path.join(&context.filename)
+        };
         save_json(&self.visible_books, path).map_err(|e| {
-            eprintln!("Couldn't export matches: {}.", e);
+            eprintln!("Can't save: {}.", e);
         }).ok();
     }
 
-    fn load_metadata(&mut self, filename: &PathBuf, hub: &Hub, context: &mut Context) {
-        let metadata = load_json::<Metadata, _>(context.settings.library_path.join(filename))
-                                 .map_err(|e| eprintln!("Can't load metadata: {}", e))
-                                 .unwrap_or_default();
-        if !metadata.is_empty() {
+    fn load(&mut self, filename: &PathBuf, hub: &Hub, context: &mut Context) {
+        let md = load_json::<Metadata, _>(context.settings.library_path.join(filename))
+                           .map_err(|e| eprintln!("Can't load: {}", e));
+        if let Ok(metadata) = md {
             let saved = save_json(&context.metadata,
                                   context.settings.library_path.join(&context.filename))
-                                 .map_err(|e| eprintln!("Can't save metadata: {}", e)).is_ok();
+                                 .map_err(|e| eprintln!("Can't save: {}", e)).is_ok();
             if saved {
                 context.filename = filename.clone();
                 context.metadata = metadata;
@@ -1238,6 +1281,37 @@ impl Home {
                 self.negated_categories.clear();
                 self.reseed(true, hub, context);
             }
+        }
+    }
+
+    fn reload(&mut self, hub: &Hub, context: &mut Context) {
+        let md = load_json::<Metadata, _>(context.settings.library_path.join(&context.filename))
+                           .map_err(|e| eprintln!("Can't load: {}", e));
+        if let Ok(metadata) = md {
+            context.metadata = metadata;
+            self.history.clear();
+            self.selected_categories.clear();
+            self.negated_categories.clear();
+            self.reseed(true, hub, context);
+        }
+    }
+
+    fn clean_up(&mut self, hub: &Hub, context: &mut Context) {
+        self.history_push(false, context);
+        let library_path = &context.settings.library_path;
+        clean_up(library_path, &mut context.metadata);
+        self.refresh_visibles(true, false, hub, context);
+    }
+
+    fn import(&mut self, hub: &Hub, context: &mut Context) {
+        let imd = auto_import(&context.settings.library_path,
+                              &context.metadata,
+                              &context.settings.import)
+                             .map_err(|e| eprintln!("Can't import: {}", e));
+        if let Ok(mut imported_metadata) = imd {
+            context.metadata.append(&mut imported_metadata);
+            sort(&mut context.metadata, self.sort_method, self.reverse_order);
+            self.refresh_visibles(true, false, hub, context);
         }
     }
 }
@@ -1252,7 +1326,7 @@ impl View for Home {
             Event::Gesture(GestureEvent::Rotate { quarter_turns, .. }) if quarter_turns != 0 => {
                 let (_, dir) = CURRENT_DEVICE.mirroring_scheme();
                 let n = (4 + (context.display.rotation - dir * quarter_turns)) % 4;
-                hub.send(Event::Select(EntryId::Rotate(n))).unwrap();
+                hub.send(Event::Select(EntryId::Rotate(n))).ok();
                 true
             },
             Event::Focus(v) => {
@@ -1322,6 +1396,12 @@ impl View for Home {
                 self.toggle_go_to_page(Some(false), hub, context);
                 true
             },
+            Event::Close(ViewId::AddCategories) |
+            Event::Close(ViewId::RenameCategory) |
+            Event::Close(ViewId::SaveAs) => {
+                self.toggle_keyboard(false, true, None, hub, context);
+                false
+            },
             Event::Select(EntryId::Sort(sort_method)) => {
                 self.set_sort_method(sort_method, hub, context);
                 true
@@ -1331,18 +1411,34 @@ impl View for Home {
                 self.set_reverse_order(next_value, hub, context);
                 true
             },
-            Event::Select(EntryId::ExportMatches) => {
-                let export_as = NamedInput::new("Export as".to_string(),
-                                                ViewId::ExportAs,
-                                                ViewId::ExportAsInput,
-                                                12, context);
-                hub.send(Event::Render(*export_as.rect(), UpdateMode::Gui)).unwrap();
-                hub.send(Event::Focus(Some(ViewId::ExportAsInput))).unwrap();
-                self.children.push(Box::new(export_as) as Box<dyn View>);
+            Event::Select(EntryId::Save) => {
+                self.save_as(None, context);
+                true
+            },
+            Event::Select(EntryId::SaveAs) => {
+                let save_as = NamedInput::new("Save as".to_string(),
+                                              ViewId::SaveAs,
+                                              ViewId::SaveAsInput,
+                                              12, context);
+                hub.send(Event::Render(*save_as.rect(), UpdateMode::Gui)).ok();
+                hub.send(Event::Focus(Some(ViewId::SaveAsInput))).ok();
+                self.children.push(Box::new(save_as) as Box<dyn View>);
+                true
+            },
+            Event::Select(EntryId::Import) => {
+                self.import(hub, context);
                 true
             },
             Event::Select(EntryId::Load(ref filename)) => {
-                self.load_metadata(filename, hub, context);
+                self.load(filename, hub, context);
+                true
+            },
+            Event::Select(EntryId::Reload) => {
+                self.reload(hub, context);
+                true
+            },
+            Event::Select(EntryId::CleanUp) => {
+                self.clean_up(hub, context);
                 true
             },
             Event::AddDocument(ref info) => {
@@ -1368,8 +1464,8 @@ impl View for Home {
                                                  ViewId::AddCategories,
                                                  ViewId::AddCategoriesInput,
                                                  21, context);
-                hub.send(Event::Render(*add_categs.rect(), UpdateMode::Gui)).unwrap();
-                hub.send(Event::Focus(Some(ViewId::AddCategoriesInput))).unwrap();
+                hub.send(Event::Render(*add_categs.rect(), UpdateMode::Gui)).ok();
+                hub.send(Event::Focus(Some(ViewId::AddCategoriesInput))).ok();
                 self.children.push(Box::new(add_categs) as Box<dyn View>);
                 true
             },
@@ -1379,9 +1475,10 @@ impl View for Home {
                                                     ViewId::RenameCategory,
                                                     ViewId::RenameCategoryInput,
                                                     21, context);
-                ren_categ.set_text(categ_old);
-                hub.send(Event::Render(*ren_categ.rect(), UpdateMode::Gui)).unwrap();
-                hub.send(Event::Focus(Some(ViewId::RenameCategoryInput))).unwrap();
+                let (tx, _rx) = mpsc::channel();
+                ren_categ.set_text(categ_old, &tx, context);
+                hub.send(Event::Render(*ren_categ.rect(), UpdateMode::Gui)).ok();
+                hub.send(Event::Focus(Some(ViewId::RenameCategoryInput))).ok();
                 self.children.push(Box::new(ren_categ) as Box<dyn View>);
                 true
             },
@@ -1398,7 +1495,7 @@ impl View for Home {
                 true
             },
             Event::Select(EntryId::EmptyTrash) => {
-                trash::empty(context).map_err(|e| eprintln!("Couldn't empty the trash: {}", e)).ok();
+                trash::empty(context).map_err(|e| eprintln!("Can't empty the trash: {}", e)).ok();
                 true
             },
             Event::Select(EntryId::Undo) => {
@@ -1417,15 +1514,18 @@ impl View for Home {
                 }
                 true
             },
-            Event::Submit(ViewId::ExportAsInput, ref text) => {
+            Event::Submit(ViewId::SaveAsInput, ref text) => {
                 if !text.is_empty() {
-                    self.export_matches(text, context);
+                    self.save_as(Some(text), context);
                 }
                 self.toggle_keyboard(false, true, None, hub, context);
                 true
             },
             Event::Submit(ViewId::AddCategoriesInput, ref text) => {
-                let categs = text.split(',').map(|s| s.trim().to_string()).collect();
+                let categs = text.split(',')
+                                 .map(|s| s.trim().to_string())
+                                 .filter(|s| !s.is_empty())
+                                 .collect();
                 if let Some(ref path) = self.target_path.take() {
                     self.add_book_categories(path, &categs, hub, context);
                 } else {
@@ -1435,13 +1535,15 @@ impl View for Home {
                 true
             },
             Event::Submit(ViewId::RenameCategoryInput, ref categ_new) => {
-                if let Some(ref categ_old) = self.target_category.take() {
-                    self.rename_category(categ_old, categ_new, hub, context);
+                if !categ_new.is_empty() {
+                    if let Some(ref categ_old) = self.target_category.take() {
+                        self.rename_category(categ_old, categ_new, hub, context);
+                    }
                 }
                 self.toggle_keyboard(false, true, None, hub, context);
                 true
             },
-            Event::Submit(ViewId::SearchInput, ref text) => {
+            Event::Submit(ViewId::HomeSearchInput, ref text) => {
                 self.query = make_query(text);
                 if self.query.is_some() {
                     // TODO: avoid updating things twice
@@ -1473,12 +1575,12 @@ impl View for Home {
                 true
             },
             Event::ToggleNegateCategory(ref categ) => {
-                self.toggle_negate_category(categ);
+                self.toggle_negate_category(categ, hub);
                 self.refresh_visibles(true, true, hub, context);
                 true
             },
             Event::ToggleNegateCategoryChildren(ref categ) => {
-                self.toggle_negate_category_children(categ);
+                self.toggle_negate_category_children(categ, hub);
                 self.refresh_visibles(true, true, hub, context);
                 true
             },
@@ -1507,7 +1609,7 @@ impl View for Home {
                 true
             },
             Event::Device(DeviceEvent::NetUp) => {
-                for (_, fetcher) in &self.background_fetchers {
+                for fetcher in self.background_fetchers.values() {
                     if let Some(process) = fetcher.process.as_ref() {
                         unsafe { libc::kill(process.id() as libc::pid_t, libc::SIGUSR1) };
                     }
@@ -1529,8 +1631,7 @@ impl View for Home {
         }
     }
 
-    fn render(&self, _fb: &mut Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) -> Rectangle {
-        self.rect
+    fn render(&self, _fb: &mut dyn Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) {
     }
 
     fn resize(&mut self, rect: Rectangle, hub: &Hub, context: &mut Context) {
@@ -1624,7 +1725,7 @@ impl View for Home {
         }
 
         self.rect = rect;
-        hub.send(Event::Render(self.rect, UpdateMode::Full)).unwrap();
+        hub.send(Event::Render(self.rect, UpdateMode::Full)).ok();
     }
 
     fn rect(&self) -> &Rectangle {

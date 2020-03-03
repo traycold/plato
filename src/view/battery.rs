@@ -41,7 +41,7 @@ impl View for Battery {
             Event::BatteryTick => {
                 self.capacity = context.battery.capacity().unwrap_or(self.capacity);
                 self.status = context.battery.status().unwrap_or(self.status);
-                hub.send(Event::Render(self.rect, UpdateMode::Gui)).unwrap();
+                hub.send(Event::Render(self.rect, UpdateMode::Gui)).ok();
                 true
             },
             Event::Gesture(GestureEvent::Tap(center)) if self.rect.includes(center) => {
@@ -52,7 +52,7 @@ impl View for Battery {
         }
     }
 
-    fn render(&self, fb: &mut Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) -> Rectangle {
+    fn render(&self, fb: &mut dyn Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) {
         let dpi = CURRENT_DEVICE.dpi;
 
         let border_radius = scale_by_dpi(THICKNESS_LARGE / 2.0, dpi) as i32;
@@ -115,8 +115,6 @@ impl View for Battery {
                               (fill_height - pixmap.height as i32) / 2);
             fb.draw_blended_pixmap(pixmap, pt, BLACK);
         }
-
-        self.rect
     }
 
     fn rect(&self) -> &Rectangle {

@@ -1,6 +1,6 @@
 use crate::device::CURRENT_DEVICE;
 use crate::framebuffer::{Framebuffer, UpdateMode};
-use super::{View, Event, Hub, Bus, KeyboardEvent, ViewId, TextKind};
+use super::{View, Event, Hub, Bus, KeyboardEvent, ViewId, EntryId, TextKind};
 use super::THICKNESS_MEDIUM;
 use crate::gesture::GestureEvent;
 use crate::font::{Fonts, font_from_style, NORMAL_STYLE, FONT_SIZES};
@@ -33,7 +33,7 @@ fn closest_char_boundary(text: &str, index: usize, dir: LinearDir) -> Option<usi
             if index == text.len() {
                 return Some(index);
             }
-            (index+1..text.len()+1).find(|&i| text.is_char_boundary(i))
+            (index+1..=text.len()).find(|&i| text.is_char_boundary(i))
         },
     }
 }
@@ -100,16 +100,21 @@ impl InputField {
         self
     }
 
-    pub fn text(mut self, text: &str) -> InputField {
+    pub fn text(mut self, text: &str, context: &mut Context) -> InputField {
         self.text = text.to_string();
         self.cursor = self.text.len();
+        context.record_input(text, self.id);
         self
     }
 
-    pub fn set_text(&mut self, text: &str, move_cursor: bool) {
-        self.text = text.to_string();
-        if move_cursor {
-            self.cursor = self.text.len();
+    pub fn set_text(&mut self, text: &str, move_cursor: bool, hub: &Hub, context: &mut Context) {
+        if self.text != text {
+            self.text = text.to_string();
+            context.record_input(text, self.id);
+            if move_cursor {
+                self.cursor = self.text.len();
+            }
+            hub.send(Event::Render(self.rect, UpdateMode::Gui)).ok();
         }
     }
 
@@ -195,18 +200,24 @@ impl View for InputField {
         match *evt {
             Event::Gesture(GestureEvent::Tap(center)) if self.rect.includes(center) => {
                 if !self.focused {
-                    hub.send(Event::Focus(Some(self.id))).unwrap();
+                    hub.send(Event::Focus(Some(self.id))).ok();
                 } else {
-                    self.cursor = self.index_from_position(center, &mut context.fonts);
-                    hub.send(Event::Render(self.rect, UpdateMode::Gui)).unwrap();
+                    let index = self.index_from_position(center, &mut context.fonts);
+                    self.cursor = self.text.char_indices().nth(index)
+                                      .map(|(i, _)| i).unwrap_or_else(|| self.text.len());
+                    hub.send(Event::Render(self.rect, UpdateMode::Gui)).ok();
                 }
+                true
+            },
+            Event::Gesture(GestureEvent::HoldFingerShort(center, _)) if self.rect.includes(center) => {
+                hub.send(Event::ToggleInputHistoryMenu(self.id, self.rect)).ok();
                 true
             },
             Event::Focus(id_opt) => {
                 let focused = id_opt.is_some() && id_opt.unwrap() == self.id;
                 if self.focused != focused {
                     self.focused = focused;
-                    hub.send(Event::Render(self.rect, UpdateMode::Gui)).unwrap();
+                    hub.send(Event::Render(self.rect, UpdateMode::Gui)).ok();
                 }
                 false
             },
@@ -238,16 +249,25 @@ impl View for InputField {
                     },
                     KeyboardEvent::Submit => {
                         bus.push_back(Event::Submit(self.id, self.text.clone()));
+                        context.record_input(&self.text, self.id);
                     },
                 };
-                hub.send(Event::RenderNoWait(self.rect, UpdateMode::Gui)).unwrap();
+                hub.send(Event::RenderNoWait(self.rect, UpdateMode::Gui)).ok();
                 true
-            }
+            },
+            Event::Select(EntryId::SetInputText(id, ref text)) => {
+                if self.id == id {
+                    self.set_text(text, true, hub, context);
+                    true
+                } else {
+                    false
+                }
+            },
             _ => false,
         }
     }
 
-    fn render(&self, fb: &mut Framebuffer, _rect: Rectangle, fonts: &mut Fonts) -> Rectangle {
+    fn render(&self, fb: &mut dyn Framebuffer, _rect: Rectangle, fonts: &mut Fonts) {
         let dpi = CURRENT_DEVICE.dpi;
         let font = font_from_style(fonts, &NORMAL_STYLE, dpi);
         let padding = font.em() as i32;
@@ -281,7 +301,7 @@ impl View for InputField {
         font.render(fb, foreground, &plan, pt);
 
         if !self.focused {
-            return self.rect;
+            return;
         }
 
         if lower_index > 0 {
@@ -310,8 +330,6 @@ impl View for InputField {
                          self.rect.max.y - big_dy + x_height);
             font.render(fb, TEXT_NORMAL[1], &plan, pt);
         }
-
-        self.rect
     }
 
     fn rect(&self) -> &Rectangle {

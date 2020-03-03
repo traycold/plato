@@ -7,7 +7,7 @@ use crate::view::page_label::PageLabel;
 use crate::gesture::GestureEvent;
 use crate::input::DeviceEvent;
 use crate::geom::{Rectangle, CycleDir, halves};
-use crate::document::{Document, Neighbors};
+use crate::document::{Document, Neighbors, TocEntry};
 use crate::color::WHITE;
 use crate::font::Fonts;
 use crate::app::Context;
@@ -21,7 +21,7 @@ pub struct BottomBar {
 }
 
 impl BottomBar {
-    pub fn new(rect: Rectangle, doc: &mut Document, current_page: usize, pages_count: usize, neighbors: &Neighbors, synthetic: bool) -> BottomBar {
+    pub fn new(rect: Rectangle, doc: &mut dyn Document, toc: Option<Vec<TocEntry>>, current_page: usize, pages_count: usize, neighbors: &Neighbors, synthetic: bool) -> BottomBar {
         let mut children = Vec::new();
         let side = rect.height() as i32;
         let is_prev_disabled = neighbors.previous_page.is_none();
@@ -45,9 +45,10 @@ impl BottomBar {
         let chapter_rect = rect![pt!(rect.min.x + side, rect.min.y),
                                  pt!(rect.min.x + side + small_half_width, rect.max.y)];
 
-        let chapter = doc.toc().as_ref().and_then(|toc| doc.chapter(current_page, toc))
-                               .map(|c| c.title.clone())
-                               .unwrap_or_default();
+        let chapter = toc.or_else(|| doc.toc()).as_ref()
+                         .and_then(|toc| doc.chapter(current_page, toc))
+                         .map(|c| c.title.clone())
+                         .unwrap_or_default();
         let chapter_label = Label::new(chapter_rect,
                                        chapter,
                                        Align::Center);
@@ -101,7 +102,7 @@ impl BottomBar {
                 self.children[index] = Box::new(prev_icon) as Box<dyn View>;
             }
             self.is_prev_disabled = is_prev_disabled;
-            hub.send(Event::Render(prev_rect, UpdateMode::Gui)).unwrap();
+            hub.send(Event::Render(prev_rect, UpdateMode::Gui)).ok();
         }
 
         let is_next_disabled = neighbors.next_page.is_none();
@@ -119,11 +120,11 @@ impl BottomBar {
                 self.children[index] = Box::new(next_icon) as Box<dyn View>;
             }
             self.is_next_disabled = is_next_disabled;
-            hub.send(Event::Render(next_rect, UpdateMode::Gui)).unwrap();
+            hub.send(Event::Render(next_rect, UpdateMode::Gui)).ok();
         }
     }
 
-    pub fn update_chapter(&mut self, text: String, hub: &Hub) {
+    pub fn update_chapter(&mut self, text: &str, hub: &Hub) {
         let chapter_label = self.child_mut(1).downcast_mut::<Label>().unwrap();
         chapter_label.update(text, hub);
     }
@@ -133,15 +134,14 @@ impl View for BottomBar {
     fn handle_event(&mut self, evt: &Event, _hub: &Hub, _bus: &mut Bus, _context: &mut Context) -> bool {
         match *evt {
             Event::Gesture(GestureEvent::Tap(center)) |
-            Event::Gesture(GestureEvent::HoldFinger(center)) if self.rect.includes(center) => true,
+            Event::Gesture(GestureEvent::HoldFingerShort(center, ..)) if self.rect.includes(center) => true,
             Event::Gesture(GestureEvent::Swipe { start, .. }) if self.rect.includes(start) => true,
             Event::Device(DeviceEvent::Finger { position, .. }) if self.rect.includes(position) => true,
             _ => false,
         }
     }
 
-    fn render(&self, _fb: &mut Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) -> Rectangle {
-        self.rect
+    fn render(&self, _fb: &mut dyn Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) {
     }
 
     fn resize(&mut self, rect: Rectangle, hub: &Hub, context: &mut Context) {

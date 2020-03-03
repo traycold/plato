@@ -23,7 +23,8 @@ lazy_static! {
         let dir = Path::new("icons");
         for name in ["home", "search", "back", "frontlight", "frontlight-disabled", "menu",
                      "angle-left", "angle-right", "angle-left-small", "angle-right-small",
-                     "delete-backward", "delete-forward", "move-backward", "move-forward",
+                     "return", "shift", "combine", "alternate", "delete-backward", "delete-forward",
+                     "move-backward", "move-backward-short", "move-forward", "move-forward-short",
                      "close",  "check_mark-small", "check_mark","check_mark-large", "bullet",
                      "arrow-left", "arrow-right", "double_angle-left", "double_angle-right",
                      "angle-down", "angle-up", "plus", "minus", "crop", "toc", "font_family",
@@ -86,12 +87,12 @@ impl View for Icon {
                 match status {
                     FingerStatus::Down if self.rect.includes(position) => {
                         self.active = true;
-                        hub.send(Event::Render(self.rect, UpdateMode::Fast)).unwrap();
+                        hub.send(Event::Render(self.rect, UpdateMode::Fast)).ok();
                         true
                     },
                     FingerStatus::Up if self.active => {
                         self.active = false;
-                        hub.send(Event::Render(self.rect, UpdateMode::Gui)).unwrap();
+                        hub.send(Event::Render(self.rect, UpdateMode::Gui)).ok();
                         true
                     },
                     _ => false,
@@ -101,17 +102,14 @@ impl View for Icon {
                 bus.push_back(self.event.clone());
                 true
             },
-            Event::Gesture(GestureEvent::HoldFinger(center)) if self.rect.includes(center) => {
+            Event::Gesture(GestureEvent::HoldFingerShort(center, ..)) if self.rect.includes(center) => {
                 match self.event {
                     Event::Page(dir) => bus.push_back(Event::Chapter(dir)),
                     Event::Show(ViewId::Frontlight) => {
-                        hub.send(Event::ToggleFrontlight).unwrap();
+                        hub.send(Event::ToggleFrontlight).ok();
                     },
                     Event::Show(ViewId::MarginCropper) => {
                         bus.push_back(Event::ToggleNear(ViewId::MarginCropperMenu, self.rect));
-                    },
-                    Event::Show(ViewId::SearchBar) | Event::Focus(Some(ViewId::SearchInput)) => {
-                        bus.push_back(Event::ToggleNear(ViewId::SearchMenu, self.rect));
                     },
                     Event::History(dir, false) => {
                         bus.push_back(Event::History(dir, true));
@@ -124,7 +122,7 @@ impl View for Icon {
         }
     }
 
-    fn render(&self, fb: &mut Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) -> Rectangle {
+    fn render(&self, fb: &mut dyn Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) {
         let dpi = CURRENT_DEVICE.dpi;
 
         let scheme = if self.active {
@@ -152,7 +150,6 @@ impl View for Icon {
         }
 
         fb.draw_blended_pixmap(pixmap, pt, scheme[1]);
-        self.rect
     }
 
     fn resize(&mut self, rect: Rectangle, _hub: &Hub, _context: &mut Context) {

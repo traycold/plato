@@ -1,4 +1,4 @@
-use crate::framebuffer::{Framebuffer, UpdateMode};
+use crate::framebuffer::{Framebuffer};
 use crate::device::CURRENT_DEVICE;
 use crate::view::{View, Event, Hub, Bus, ViewId, THICKNESS_MEDIUM};
 use crate::view::icon::Icon;
@@ -19,7 +19,7 @@ pub struct InputBar {
 }
 
 impl InputBar {
-    pub fn new(rect: Rectangle, placeholder: &str, text: &str) -> InputBar {
+    pub fn new(rect: Rectangle, placeholder: &str, text: &str, context: &mut Context) -> InputBar {
         let mut children = Vec::new();
         let dpi = CURRENT_DEVICE.dpi;
         let thickness = scale_by_dpi(THICKNESS_MEDIUM, dpi) as i32;
@@ -40,7 +40,7 @@ impl InputBar {
                                                 pt!(rect.max.x - side - thickness, rect.max.y)],
                                           ViewId::CalculatorInput)
                                      .border(false)
-                                     .text(text)
+                                     .text(text, context)
                                      .placeholder(placeholder);
         children.push(Box::new(input_field) as Box<dyn View>);
 
@@ -62,10 +62,9 @@ impl InputBar {
         }
     }
 
-    pub fn set_text(&mut self, text: &str, move_cursor: bool, hub: &Hub) {
+    pub fn set_text(&mut self, text: &str, move_cursor: bool, hub: &Hub, context: &mut Context) {
         if let Some(input_field) = self.children[2].downcast_mut::<InputField>() {
-            input_field.set_text(text, move_cursor);
-            hub.send(Event::Render(*input_field.rect(), UpdateMode::Gui)).unwrap();
+            input_field.set_text(text, move_cursor, hub, context);
         }
     }
 
@@ -78,15 +77,14 @@ impl View for InputBar {
     fn handle_event(&mut self, evt: &Event, _hub: &Hub, _bus: &mut Bus, _context: &mut Context) -> bool {
         match *evt {
             Event::Gesture(GestureEvent::Tap(center)) |
-            Event::Gesture(GestureEvent::HoldFinger(center)) if self.rect.includes(center) => true,
+            Event::Gesture(GestureEvent::HoldFingerShort(center, ..)) if self.rect.includes(center) => true,
             Event::Gesture(GestureEvent::Swipe { start, .. }) if self.rect.includes(start) => true,
             Event::Device(DeviceEvent::Finger { position, .. }) if self.rect.includes(position) => true,
             _ => false,
         }
     }
 
-    fn render(&self, _fb: &mut Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) -> Rectangle {
-        self.rect
+    fn render(&self, _fb: &mut dyn Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) {
     }
 
     fn resize(&mut self, rect: Rectangle, hub: &Hub, context: &mut Context) {

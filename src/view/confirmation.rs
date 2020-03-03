@@ -100,7 +100,7 @@ impl View for Confirmation {
                 let id = self.id;
                 thread::spawn(move || {
                     thread::sleep(CLOSE_IGNITION_DELAY);
-                    hub2.send(Event::Close(id)).unwrap();
+                    hub2.send(Event::Close(id)).ok();
                 });
                 if let Event::Validate = *evt {
                     bus.push_back(self.event.clone());
@@ -109,7 +109,7 @@ impl View for Confirmation {
                 true
             },
             Event::Gesture(GestureEvent::Tap(center)) if !self.rect.includes(center) => {
-                hub.send(Event::Close(self.id)).unwrap();
+                hub.send(Event::Close(self.id)).ok();
                 true
             },
             Event::Gesture(..) => true,
@@ -117,7 +117,7 @@ impl View for Confirmation {
         }
     }
 
-    fn render(&self, fb: &mut Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) -> Rectangle {
+    fn render(&self, fb: &mut dyn Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) {
         let dpi = CURRENT_DEVICE.dpi;
 
         let border_radius = scale_by_dpi(BORDER_RADIUS_MEDIUM, dpi) as i32;
@@ -128,7 +128,6 @@ impl View for Confirmation {
                                               &BorderSpec { thickness: border_thickness,
                                                             color: BLACK },
                                               &WHITE);
-        self.rect
     }
 
     fn resize(&mut self, _rect: Rectangle, hub: &Hub, context: &mut Context) {

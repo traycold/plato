@@ -1,7 +1,8 @@
 mod preset;
 
+use std::fmt::{self, Debug};
 use std::path::PathBuf;
-use fnv::{FnvHashSet, FnvHashMap};
+use std::collections::{HashSet, HashMap, BTreeMap};
 use serde::{Serialize, Deserialize};
 use crate::metadata::{SortMethod, TextAlign};
 use crate::frontlight::LightLevels;
@@ -24,20 +25,49 @@ pub const DEFAULT_FONT_FAMILY: &str = "Libertinus Serif";
 // Default text alignment.
 pub const DEFAULT_TEXT_ALIGN: TextAlign = TextAlign::Left;
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RotationLock {
+    Landscape,
+    Portrait,
+    Current,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ButtonScheme {
+    Natural,
+    Inverted,
+}
+
+impl fmt::Display for ButtonScheme {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        Debug::fmt(self, f)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct Settings {
     pub library_path: PathBuf,
+    pub keyboard_layout: String,
     pub frontlight: bool,
     pub wifi: bool,
+    pub sleep_cover: bool,
+    pub auto_share: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rotation_lock: Option<RotationLock>,
+    pub button_scheme: ButtonScheme,
     pub auto_suspend: u8,
-    #[serde(skip_serializing_if = "FnvHashMap::is_empty")]
-    pub intermission_images: FnvHashMap<String, PathBuf>,
+    pub auto_power_off: u8,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pub intermission_images: HashMap<String, PathBuf>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub frontlight_presets: Vec<LightPreset>,
     pub home: HomeSettings,
     pub reader: ReaderSettings,
     pub import: ImportSettings,
+    pub dictionary: DictionarySettings,
     pub sketch: SketchSettings,
     pub calculator: CalculatorSettings,
     pub battery: BatterySettings,
@@ -67,8 +97,27 @@ pub struct ImportSettings {
     pub unshare_trigger: bool,
     pub startup_trigger: bool,
     pub traverse_hidden: bool,
-    pub allowed_kinds: FnvHashSet<String>,
-    pub category_providers: FnvHashSet<CategoryProvider>,
+    pub allowed_kinds: HashSet<String>,
+    pub category_providers: HashSet<CategoryProvider>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct DictionarySettings {
+    pub margin_width: i32,
+    pub font_size: f32,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub languages: BTreeMap<String, Vec<String>>,
+}
+
+impl Default for DictionarySettings {
+    fn default() -> Self {
+        DictionarySettings {
+            font_size: 11.0,
+            margin_width: 4,
+            languages: BTreeMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,6 +210,7 @@ impl Default for Hook {
 pub struct HomeSettings {
     pub summary_size: u8,
     pub second_column: SecondColumn,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hooks: Vec<Hook>,
 }
 
@@ -169,7 +219,6 @@ pub struct HomeSettings {
 pub struct ReaderSettings {
     pub refresh_every: u8,
     pub finished: FinishedAction,
-    pub epub_engine: EpubEngine,
     pub font_path: String,
     pub font_family: String,
     pub font_size: f32,
@@ -183,13 +232,6 @@ pub struct ReaderSettings {
 pub struct BatterySettings {
     pub warn: f32,
     pub power_off: f32,
-}
-
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum EpubEngine {
-    BuiltIn,
-    Mupdf,
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
@@ -214,7 +256,6 @@ impl Default for ReaderSettings {
         ReaderSettings {
             refresh_every: 8,
             finished: FinishedAction::Notify,
-            epub_engine: EpubEngine::BuiltIn,
             font_path: DEFAULT_FONT_PATH.to_string(),
             font_family: DEFAULT_FONT_FAMILY.to_string(),
             font_size: DEFAULT_FONT_SIZE,
@@ -232,7 +273,7 @@ impl Default for ImportSettings {
             startup_trigger: true,
             traverse_hidden: false,
             allowed_kinds: ["pdf", "djvu", "epub",
-                            "fb2", "cbz"].iter().map(|k| k.to_string()).collect(),
+                            "fb2", "xps", "oxps", "cbz"].iter().map(|k| k.to_string()).collect(),
             category_providers: [CategoryProvider::Path].iter().cloned().collect(),
         }
     }
@@ -250,14 +291,21 @@ impl Default for BatterySettings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            library_path: PathBuf::from("/mnt/onboard"),
+            library_path: CURRENT_DEVICE.library_path(),
+            keyboard_layout: "English".to_string(),
             frontlight: true,
             wifi: false,
-            auto_suspend: 15,
-            intermission_images: FnvHashMap::default(),
+            sleep_cover: true,
+            auto_share: false,
+            rotation_lock: None,
+            button_scheme: ButtonScheme::Natural,
+            auto_suspend: 30,
+            auto_power_off: 3,
+            intermission_images: HashMap::new(),
             home: HomeSettings::default(),
             reader: ReaderSettings::default(),
             import: ImportSettings::default(),
+            dictionary: DictionarySettings::default(),
             sketch: SketchSettings::default(),
             calculator: CalculatorSettings::default(),
             battery: BatterySettings::default(),

@@ -6,7 +6,7 @@ use super::{THICKNESS_MEDIUM, BORDER_RADIUS_LARGE};
 use crate::framebuffer::{Framebuffer, UpdateMode};
 use crate::input::{DeviceEvent, FingerStatus};
 use crate::gesture::GestureEvent;
-use crate::color::{BLACK, TEXT_NORMAL, TEXT_INVERTED_HARD};
+use crate::color::{TEXT_NORMAL, TEXT_INVERTED_HARD};
 use crate::unit::scale_by_dpi;
 use crate::app::Context;
 
@@ -44,12 +44,12 @@ impl View for Button {
                 match status {
                     FingerStatus::Down if self.rect.includes(position) => {
                         self.active = true;
-                        hub.send(Event::Render(self.rect, UpdateMode::Fast)).unwrap();
+                        hub.send(Event::Render(self.rect, UpdateMode::Fast)).ok();
                         true
                     },
                     FingerStatus::Up if self.active => {
                         self.active = false;
-                        hub.send(Event::Render(self.rect, UpdateMode::Gui)).unwrap();
+                        hub.send(Event::Render(self.rect, UpdateMode::Gui)).ok();
                         true
                     },
                     _ => false,
@@ -65,7 +65,7 @@ impl View for Button {
         }
     }
 
-    fn render(&self, fb: &mut Framebuffer, _rect: Rectangle, fonts: &mut Fonts) -> Rectangle {
+    fn render(&self, fb: &mut dyn Framebuffer, _rect: Rectangle, fonts: &mut Fonts) {
         let dpi = CURRENT_DEVICE.dpi;
 
         let scheme = if self.active {
@@ -73,6 +73,7 @@ impl View for Button {
         } else {
             TEXT_NORMAL
         };
+        let foreground = if self.disabled { scheme[2] } else { scheme[1] };
 
         let border_radius = scale_by_dpi(BORDER_RADIUS_LARGE, dpi) as i32;
         let border_thickness = scale_by_dpi(THICKNESS_MEDIUM, dpi) as u16;
@@ -80,7 +81,7 @@ impl View for Button {
         fb.draw_rounded_rectangle_with_border(&self.rect,
                                               &CornerSpec::Uniform(border_radius),
                                               &BorderSpec { thickness: border_thickness,
-                                                            color: BLACK },
+                                                            color: foreground },
                                               &scheme[0]);
 
         let font = font_from_style(fonts, &NORMAL_STYLE, dpi);
@@ -94,9 +95,7 @@ impl View for Button {
         let dy = (self.rect.height() as i32 - x_height) / 2;
         let pt = pt!(self.rect.min.x + dx, self.rect.max.y - dy);
 
-        let foreground = if self.disabled { scheme[2] } else { scheme[1] };
         font.render(fb, foreground, &plan, pt);
-        self.rect
     }
 
     fn rect(&self) -> &Rectangle {

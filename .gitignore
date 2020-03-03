@@ -6,11 +6,13 @@
 /libs
 /bin
 /Settings.toml
-/user.css
+/css/*-user.css
 /hyphenation-patterns
+/dictionaries
 /src/wrapper/*.so
 /src/wrapper/*.dylib
 /dist
+/plato-*.zip
 /thirdparty/*/*
 !/thirdparty/*/*kobo*
 plato

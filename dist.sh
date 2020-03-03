@@ -2,13 +2,11 @@
 
 [ -d dist ] && rm -Rf dist
 
-if ! [ -x thirdparty/chrpath/chrpath ] ; then
-	cd thirdparty/chrpath
-	./configure && make
-	cd ../..
-fi
+[ -d bin ] || ./download.sh 'bin/*'
+[ -d hyphenation-patterns ] || ./download.sh 'hyphenation-patterns/*'
 
 mkdir -p dist/libs
+mkdir dist/dictionaries
 
 cp libs/libz.so dist/libs/libz.so.1
 cp libs/libbz2.so dist/libs/libbz2.so.1.0
@@ -26,13 +24,16 @@ cp libs/libmupdf.so dist/libs
 cp libs/libmupdfwrapper.so dist/libs
 
 cp -R hyphenation-patterns dist
+cp -R keyboard-layouts dist
 cp -R bin dist
 cp -R scripts dist
 cp -R icons dist
 cp -R fonts dist
 cp -R css dist
+find dist/css -name '*-user.css' -delete
+find dist/keyboard-layouts -name '*-user.json' -delete
 cp target/arm-unknown-linux-gnueabihf/release/plato dist/
 
-./thirdparty/chrpath/chrpath -d dist/libs/*
+patchelf --remove-rpath dist/libs/*
 
 arm-linux-gnueabihf-strip dist/plato dist/libs/*

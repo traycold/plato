@@ -217,19 +217,19 @@ impl ToolBar {
     pub fn update_margin_width(&mut self, margin_width: i32, hub: &Hub) {
         let index = if self.reflowable { 0 } else { 8 };
         if let Some(labeled_icon) = self.children[index].downcast_mut::<LabeledIcon>() {
-            labeled_icon.update(format!("{} mm", margin_width), hub);
+            labeled_icon.update(&format!("{} mm", margin_width), hub);
         }
     }
 
     pub fn update_font_family(&mut self, font_family: String, hub: &Hub) {
         if let Some(labeled_icon) = self.children[1].downcast_mut::<LabeledIcon>() {
-            labeled_icon.update(font_family, hub);
+            labeled_icon.update(&font_family, hub);
         }
     }
 
     pub fn update_line_height(&mut self, line_height: f32, hub: &Hub) {
         if let Some(labeled_icon) = self.children[2].downcast_mut::<LabeledIcon>() {
-            labeled_icon.update(format!("{:.1} em", line_height), hub);
+            labeled_icon.update(&format!("{:.1} em", line_height), hub);
         }
     }
 
@@ -238,7 +238,7 @@ impl ToolBar {
         let name = text_align.icon_name();
         if icon.name != name {
             icon.name = name.to_string();
-            hub.send(Event::Render(*icon.rect(), UpdateMode::Gui)).unwrap();
+            hub.send(Event::Render(*icon.rect(), UpdateMode::Gui)).ok();
         }
     }
 
@@ -262,15 +262,14 @@ impl View for ToolBar {
     fn handle_event(&mut self, evt: &Event, _hub: &Hub, _bus: &mut Bus, _context: &mut Context) -> bool {
         match *evt {
             Event::Gesture(GestureEvent::Tap(center)) |
-            Event::Gesture(GestureEvent::HoldFinger(center)) if self.rect.includes(center) => true,
+            Event::Gesture(GestureEvent::HoldFingerShort(center, ..)) if self.rect.includes(center) => true,
             Event::Gesture(GestureEvent::Swipe { start, .. }) if self.rect.includes(start) => true,
             Event::Device(DeviceEvent::Finger { position, .. }) if self.rect.includes(position) => true,
             _ => false,
         }
     }
 
-    fn render(&self, _fb: &mut Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) -> Rectangle {
-        self.rect
+    fn render(&self, _fb: &mut dyn Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) {
     }
 
     fn resize(&mut self, rect: Rectangle, hub: &Hub, context: &mut Context) {

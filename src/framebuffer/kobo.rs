@@ -6,9 +6,8 @@ use std::slice;
 use std::os::unix::io::AsRawFd;
 use std::ops::Drop;
 use failure::{Error, ResultExt};
-use libc::ioctl;
-use png::HasParameters;
 use crate::geom::Rectangle;
+use crate::device::{CURRENT_DEVICE, Model};
 use super::{UpdateMode, Framebuffer};
 use super::mxcfb_sys::*;
 
@@ -33,6 +32,7 @@ pub struct KoboFramebuffer {
     frame_size: libc::size_t, 
     token: u32,
     flags: u32,
+    monochrome: bool,
     set_pixel_rgb: SetPixelRgb,
     get_pixel_rgb: GetPixelRgb,
     as_rgb: AsRgb,
@@ -76,6 +76,7 @@ impl KoboFramebuffer {
                    frame_size,
                    token: 1,
                    flags: 0,
+                   monochrome: false,
                    set_pixel_rgb,
                    get_pixel_rgb,
                    as_rgb,
@@ -121,48 +122,81 @@ impl Framebuffer for KoboFramebuffer {
         }
     }
 
+    fn shift_region(&mut self, rect: &Rectangle, drift: u8) {
+        for y in rect.min.y..rect.max.y {
+            for x in rect.min.x..rect.max.x {
+                let rgb = (self.get_pixel_rgb)(self, x as u32, y as u32);
+                let red = rgb[0].saturating_sub(drift);
+                let green = rgb[1].saturating_sub(drift);
+                let blue = rgb[2].saturating_sub(drift);
+                (self.set_pixel_rgb)(self, x as u32, y as u32, [red, green, blue]);
+            }
+        }
+    }
+
     // Tell the driver that the screen needs to be redrawn.
-    // The `rect` parameter is ignored for the `Full` mode.
-    // The `Fast` mode maps everything to BLACK and WHITE.
     fn update(&mut self, rect: &Rectangle, mode: UpdateMode) -> Result<u32, Error> {
-        let (update_mode, waveform_mode) = match mode {
-            UpdateMode::Gui |
-            UpdateMode::Partial  => (UPDATE_MODE_PARTIAL, WAVEFORM_MODE_AUTO),
-            UpdateMode::Full     => (UPDATE_MODE_FULL, NTX_WFM_MODE_GC16),
-            UpdateMode::Fast |
-            UpdateMode::FastMono => (UPDATE_MODE_PARTIAL, NTX_WFM_MODE_A2),
-        };
-        let alt_buffer_data = MxcfbAltBufferData {
-            virt_addr: ptr::null(),
-            phys_addr: 0,
-            width: 0,
-            height: 0,
-            alt_update_region: MxcfbRect {
-                top: 0,
-                left: 0,
-                width: 0,
-                height: 0,
-            },
-        };
         let update_marker = self.token;
         let mut flags = self.flags;
-        if mode == UpdateMode::FastMono {
+        let mark = CURRENT_DEVICE.mark();
+
+        let (update_mode, mut waveform_mode) = match mode {
+            UpdateMode::Gui => (UPDATE_MODE_PARTIAL, WAVEFORM_MODE_AUTO),
+            UpdateMode::Partial  => {
+                if mark >= 7 {
+                    (UPDATE_MODE_PARTIAL, NTX_WFM_MODE_GLR16)
+                } else if CURRENT_DEVICE.model == Model::Aura {
+                    flags |= EPDC_FLAG_USE_AAD;
+                    (UPDATE_MODE_FULL, NTX_WFM_MODE_GLD16)
+                } else {
+                    (UPDATE_MODE_PARTIAL, WAVEFORM_MODE_AUTO)
+                }
+            },
+            UpdateMode::Full     => (UPDATE_MODE_FULL, NTX_WFM_MODE_GC16),
+            UpdateMode::Fast     => (UPDATE_MODE_PARTIAL, NTX_WFM_MODE_A2),
+            UpdateMode::FastMono => {
+                flags |= EPDC_FLAG_FORCE_MONOCHROME;
+                (UPDATE_MODE_PARTIAL, NTX_WFM_MODE_A2)
+            },
+        };
+
+        if self.monochrome {
             flags |= EPDC_FLAG_FORCE_MONOCHROME;
+            waveform_mode = NTX_WFM_MODE_A2;
         }
-        let update_data = MxcfbUpdateData {
-            update_region: (*rect).into(),
-            waveform_mode,
-            update_mode,
-            update_marker,
-            temp: TEMP_USE_AMBIENT,
-            flags,
-            alt_buffer_data,
+
+        let result = if mark >= 7 {
+            let update_data = MxcfbUpdateDataV2 {
+                update_region: (*rect).into(),
+                waveform_mode,
+                update_mode,
+                update_marker,
+                temp: TEMP_USE_AMBIENT,
+                flags,
+                dither_mode: 0,
+                quant_bit: 0,
+                alt_buffer_data: MxcfbAltBufferDataV2::default(),
+            };
+            unsafe {
+                send_update_v2(self.file.as_raw_fd(), &update_data)
+            }
+        } else {
+            let update_data = MxcfbUpdateDataV1 {
+                update_region: (*rect).into(),
+                waveform_mode,
+                update_mode,
+                update_marker,
+                temp: TEMP_USE_AMBIENT,
+                flags,
+                alt_buffer_data: MxcfbAltBufferDataV1::default(),
+            };
+            unsafe {
+                send_update_v1(self.file.as_raw_fd(), &update_data)
+            }
         };
-        let result = unsafe {
-            libc::ioctl(self.file.as_raw_fd(), MXCFB_SEND_UPDATE, &update_data)
-        };
+
         match result {
-            -1 => Err(Error::from(io::Error::last_os_error()).context("Can't update framebuffer.").into()),
+            Err(e) => Err(Error::from(e).context("Can't send framebuffer update.").into()),
             _ => {
                 self.token = self.token.wrapping_add(1);
                 Ok(update_marker)
@@ -170,24 +204,30 @@ impl Framebuffer for KoboFramebuffer {
         }
     }
 
-    // Wait for a specific update to complete
+    // Wait for a specific update to complete.
     fn wait(&self, token: u32) -> Result<i32, Error> {
-        let result = unsafe {
-            libc::ioctl(self.file.as_raw_fd(), MXCFB_WAIT_FOR_UPDATE_COMPLETE, &token)
-        };
-        match result {
-            -1 => Err(Error::from(io::Error::last_os_error()).context("Can't wait for framebuffer update.").into()),
-            _ => {
-                Ok(result as i32)
+        let result = if CURRENT_DEVICE.mark() >= 7 {
+            let mut marker_data = MxcfbUpdateMarkerData {
+                update_marker: token,
+                collision_test: 0,
+            };
+            unsafe {
+                wait_for_update_v2(self.file.as_raw_fd(), &mut marker_data)
             }
-        }
+        } else {
+            unsafe {
+                wait_for_update_v1(self.file.as_raw_fd(), &token)
+            }
+        };
+        result.map_err(|e| Error::from(e).context("Can't wait for framebuffer update.").into())
     }
 
     fn save(&self, path: &str) -> Result<(), Error> {
         let (width, height) = self.dims();
         let file = File::create(path).context("Can't create output file.")?;
         let mut encoder = png::Encoder::new(file, width, height);
-        encoder.set(png::ColorType::RGB).set(png::BitDepth::Eight);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_color(png::ColorType::RGB);
         let mut writer = encoder.write_header().context("Can't write header.")?;
         writer.write_image_data(&(self.as_rgb)(self)).context("Can't write data to file.")?;
         Ok(())
@@ -209,11 +249,11 @@ impl Framebuffer for KoboFramebuffer {
             self.var_info.rotate = *v as u32;
 
             let result = unsafe {
-                libc::ioctl(self.file.as_raw_fd(), FBIOPUT_VSCREENINFO, &mut self.var_info)
+                write_variable_screen_info(self.file.as_raw_fd(), &mut self.var_info)
             };
 
-            if result == -1 {
-                return Err(Error::from(io::Error::last_os_error())
+            if let Err(e) = result {
+                return Err(Error::from(e)
                                  .context("Can't set variable screen info.").into());
             }
 
@@ -244,15 +284,11 @@ impl Framebuffer for KoboFramebuffer {
     }
 
     fn set_monochrome(&mut self, enable: bool) {
-        if enable {
-            self.flags |= EPDC_FLAG_FORCE_MONOCHROME;
-        } else {
-            self.flags &= !EPDC_FLAG_FORCE_MONOCHROME;
-        }
+        self.monochrome = enable;
     }
 
     fn monochrome(&self) -> bool {
-        self.flags & EPDC_FLAG_FORCE_MONOCHROME != 0
+        self.monochrome
     }
 
     fn width(&self) -> u32 {
@@ -264,7 +300,6 @@ impl Framebuffer for KoboFramebuffer {
     }
 }
 
-#[inline]
 pub fn set_pixel_rgb_16(fb: &mut KoboFramebuffer, x: u32, y: u32, rgb: [u8; 3]) {
     let addr = (fb.var_info.xoffset as isize + x as isize) * (fb.bytes_per_pixel as isize) +
                (fb.var_info.yoffset as isize + y as isize) * (fb.fix_info.line_length as isize);
@@ -278,7 +313,6 @@ pub fn set_pixel_rgb_16(fb: &mut KoboFramebuffer, x: u32, y: u32, rgb: [u8; 3]) 
     }
 }
 
-#[inline]
 pub fn set_pixel_rgb_32(fb: &mut KoboFramebuffer, x: u32, y: u32, rgb: [u8; 3]) {
     let addr = (fb.var_info.xoffset as isize + x as isize) * (fb.bytes_per_pixel as isize) +
                (fb.var_info.yoffset as isize + y as isize) * (fb.fix_info.line_length as isize);
@@ -348,18 +382,22 @@ fn as_rgb_32(fb: &KoboFramebuffer) -> Vec<u8> {
 
 pub fn fix_screen_info(file: &File) -> Result<FixScreenInfo, Error> {
     let mut info: FixScreenInfo = Default::default();
-    let result = unsafe { ioctl(file.as_raw_fd(), FBIOGET_FSCREENINFO, &mut info) };
+    let result = unsafe {
+        read_fixed_screen_info(file.as_raw_fd(), &mut info)
+    };
     match result {
-        -1 => Err(Error::from(io::Error::last_os_error()).context("Can't get fixed screen info.").into()),
+        Err(e) => Err(Error::from(e).context("Can't get fixed screen info.").into()),
         _ => Ok(info),
     }
 }
 
 pub fn var_screen_info(file: &File) -> Result<VarScreenInfo, Error> {
     let mut info: VarScreenInfo = Default::default();
-    let result = unsafe { ioctl(file.as_raw_fd(), FBIOGET_VSCREENINFO, &mut info) };
+    let result = unsafe {
+        read_variable_screen_info(file.as_raw_fd(), &mut info)
+    };
     match result {
-        -1 => Err(Error::from(io::Error::last_os_error()).context("Can't get variable screen info.").into()),
+        Err(e) => Err(Error::from(e).context("Can't get variable screen info.").into()),
         _ => Ok(info),
     }
 }

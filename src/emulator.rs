@@ -9,6 +9,7 @@ mod battery;
 mod device;
 mod font;
 mod helpers;
+mod dictionary;
 mod document;
 mod metadata;
 mod settings;
@@ -16,6 +17,7 @@ mod frontlight;
 mod lightsensor;
 mod symbolic_path;
 mod trash;
+mod rtc;
 mod app;
 
 use std::mem;
@@ -29,7 +31,6 @@ use std::time::Duration;
 use failure::{Error, ResultExt};
 use fnv::FnvHashMap;
 use chrono::Local;
-use png::HasParameters;
 use sdl2::event::Event as SdlEvent;
 use sdl2::keyboard::{Scancode, Keycode};
 use sdl2::render::{WindowCanvas, BlendMode};
@@ -38,17 +39,18 @@ use sdl2::rect::Point as SdlPoint;
 use sdl2::rect::Rect as SdlRect;
 use crate::framebuffer::{Framebuffer, UpdateMode};
 use crate::input::{DeviceEvent, FingerStatus};
-use crate::view::{View, Event, ViewId, EntryId, AppId, EntryKind};
-use crate::view::{render, render_no_wait, render_no_wait_region, handle_event, expose};
+use crate::view::{View, Event, ViewId, EntryId, AppCmd, EntryKind};
+use crate::view::{render, render_region, render_no_wait, render_no_wait_region, handle_event, expose};
 use crate::view::home::Home;
 use crate::view::reader::Reader;
 use crate::view::notification::Notification;
 use crate::view::frontlight::FrontlightWindow;
-use crate::view::keyboard::Keyboard;
 use crate::view::menu::{Menu, MenuKind};
-use crate::view::sketch::Sketch;
+use crate::view::dictionary::Dictionary;
 use crate::view::calculator::Calculator;
+use crate::view::sketch::Sketch;
 use crate::view::common::{locate, locate_by_id, transfer_notifications, overlapping_rectangle};
+use crate::view::common::{toggle_input_history_menu, toggle_keyboard_layout_menu};
 use crate::helpers::{load_json, save_json, load_toml, save_toml};
 use crate::metadata::{Metadata, METADATA_FILENAME, auto_import};
 use crate::settings::{Settings, SETTINGS_PATH};
@@ -80,7 +82,7 @@ pub fn build_context(fb: Box<dyn Framebuffer>) -> Result<Context, Error> {
     let frontlight = Box::new(LightLevels::default()) as Box<dyn Frontlight>;
     let lightsensor = Box::new(0u16) as Box<dyn LightSensor>;
     let fonts = Fonts::load()?;
-    Ok(Context::new(fb, settings, metadata, PathBuf::from(METADATA_FILENAME),
+    Ok(Context::new(fb, None, settings, metadata, PathBuf::from(METADATA_FILENAME),
                     fonts, battery, frontlight, lightsensor))
 }
 
@@ -107,7 +109,7 @@ pub fn device_event(event: SdlEvent) -> Option<DeviceEvent> {
                                        status: FingerStatus::Motion,
                                        position: pt!(x, y),
                                        time: seconds(timestamp) }),
-        _ => None
+        _ => None,
     }
 }
 
@@ -139,6 +141,23 @@ impl Framebuffer for WindowCanvas {
         }
     }
 
+    fn shift_region(&mut self, rect: &Rectangle, drift: u8) {
+        let width = rect.width();
+        let s_rect = Some(SdlRect::new(rect.min.x, rect.min.y,
+                                       width, rect.height()));
+        if let Ok(data) = self.read_pixels(s_rect, PixelFormatEnum::RGB24) {
+            for y in rect.min.y..rect.max.y {
+                let v = (y - rect.min.y) as u32;
+                for x in rect.min.x..rect.max.x {
+                    let u = (x - rect.min.x) as u32;
+                    let addr = 3 * (v * width + u);
+                    let color = data[addr as usize].saturating_sub(drift);
+                    self.set_pixel(x as u32, y as u32, color);
+                }
+            }
+        }
+    }
+
     fn update(&mut self, _rect: &Rectangle, _mode: UpdateMode) -> Result<u32, Error> {
         self.present();
         Ok(Local::now().timestamp_subsec_millis())
@@ -152,7 +171,8 @@ impl Framebuffer for WindowCanvas {
         let (width, height) = self.dims();
         let file = File::create(path).context("Can't create output file.")?;
         let mut encoder = png::Encoder::new(file, width, height);
-        encoder.set(png::ColorType::RGB).set(png::BitDepth::Eight);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_color(png::ColorType::RGB);
         let mut writer = encoder.write_header().context("Can't write header.")?;
         let data = self.read_pixels(self.viewport(), PixelFormatEnum::RGB24).unwrap_or_default();
         writer.write_image_data(&data).context("Can't write data to file.")?;
@@ -168,7 +188,7 @@ impl Framebuffer for WindowCanvas {
         if (width < height && n % 2 == 0) || (width > height && n % 2 == 1) {
             mem::swap(&mut width, &mut height);
         }
-        self.window_mut().set_size(width, height);
+        self.window_mut().set_size(width, height).ok();
         Ok((width, height))
     }
 
@@ -206,6 +226,9 @@ pub fn run() -> Result<(), Error> {
 
     let mut context = build_context(Box::new(fb))?;
 
+    context.load_dictionaries();
+    context.load_keyboard_layouts();
+
     let (tx, rx) = mpsc::channel();
     let (ty, ry) = mpsc::channel();
     let touch_screen = gesture_events(ry);
@@ -213,7 +236,7 @@ pub fn run() -> Result<(), Error> {
     let tx2 = tx.clone();
     thread::spawn(move || {
         while let Ok(evt) = touch_screen.recv() {
-            tx2.send(evt).unwrap();
+            tx2.send(evt).ok();
         }
     });
 
@@ -221,7 +244,7 @@ pub fn run() -> Result<(), Error> {
     thread::spawn(move || {
         loop {
             thread::sleep(CLOCK_REFRESH_INTERVAL);
-            tx3.send(Event::ClockTick).unwrap();
+            tx3.send(Event::ClockTick).ok();
         }
     });
 
@@ -258,46 +281,21 @@ pub fn run() -> Result<(), Error> {
                     break;
                 },
                 SdlEvent::KeyDown { scancode: Some(scancode), .. } => {
-                    if let Some(kb_idx) = locate::<Keyboard>(view.as_ref()) {
-                        let index = match scancode {
-                            Scancode::Backspace => Some(10),
-                            Scancode::Delete => Some(20),
-                            Scancode::LShift | Scancode::RShift => Some(21),
-                            Scancode::Return => Some(29),
-                            Scancode::Left => Some(30),
-                            Scancode::LGui | Scancode::RGui => Some(31),
-                            Scancode::Space => Some(32),
-                            Scancode::LAlt | Scancode::RAlt => Some(33),
-                            Scancode::Right => Some(34),
-                            _ => {
-                                let name = scancode.name();
-                                if name.len() == 1 {
-                                    let c = name.chars().next().unwrap()
-                                                .to_lowercase().next().unwrap();
-                                    if let Some(i) = "qwertyuiop".find(c) {
-                                        Some(i)
-                                    } else if let Some(i) = "asdfghjkl".find(c) {
-                                        Some(11+i)
-                                    } else if let Some(i) = "zxcvbnm".find(c) {
-                                        Some(22+i)
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                            },
-                        };
-                        if index.is_some() {
-                            let position = view.child(kb_idx).child(index.unwrap()).rect().center();
-                            ty.send(DeviceEvent::Finger { status: FingerStatus::Down, position, id: 0, time: 0.0}).unwrap();
-                            ty.send(DeviceEvent::Finger { status: FingerStatus::Up, position, id: 0, time: 0.0}).unwrap();
-                        }
+                    match scancode {
+                        Scancode::LeftBracket => {
+                            let rot = (3 + context.display.rotation) % 4;
+                            ty.send(DeviceEvent::RotateScreen(rot)).ok();
+                        },
+                        Scancode::RightBracket => {
+                            let rot = (5 + context.display.rotation) % 4;
+                            ty.send(DeviceEvent::RotateScreen(rot)).ok();
+                        },
+                        _ => (),
                     }
                 },
                 _ => {
                     if let Some(dev_evt) = device_event(sdl_evt) {
-                        ty.send(dev_evt).unwrap();
+                        ty.send(dev_evt).ok();
                     }
                 },
             }
@@ -307,6 +305,12 @@ pub fn run() -> Result<(), Error> {
             match evt {
                 Event::Render(mut rect, mode) => {
                     render(view.as_ref(), &mut rect, context.fb.as_mut(), &mut context.fonts, &mut updating);
+                    if let Ok(tok) = context.fb.update(&rect, mode) {
+                        updating.insert(tok, rect);
+                    }
+                },
+                Event::RenderRegion(mut rect, mode) => {
+                    render_region(view.as_ref(), &mut rect, context.fb.as_mut(), &mut context.fonts, &mut updating);
                     if let Ok(tok) = context.fb.update(&rect, mode) {
                         updating.insert(tok, rect);
                     }
@@ -346,6 +350,12 @@ pub fn run() -> Result<(), Error> {
                         history.push(view as Box<dyn View>);
                         view = next_view;
                     } else {
+                        if context.display.rotation != rotation {
+                            if let Ok(dims) = context.fb.set_rotation(rotation) {
+                                context.display.rotation = rotation;
+                                context.display.dims = dims;
+                            }
+                        }
                         handle_event(view.as_mut(), &Event::Invalid(info2), &tx, &mut bus, &mut context);
                     }
                 },
@@ -356,18 +366,21 @@ pub fn run() -> Result<(), Error> {
                     history.push(view as Box<dyn View>);
                     view = next_view;
                 },
-                Event::Select(EntryId::Launch(app_id)) => {
+                Event::Select(EntryId::Launch(app_cmd)) => {
                     view.children_mut().retain(|child| !child.is::<Menu>());
-                    let mut next_view: Box<View> = match app_id {
-                        AppId::Sketch => {
+                    let mut next_view: Box<dyn View> = match app_cmd {
+                        AppCmd::Sketch => {
                             Box::new(Sketch::new(context.fb.rect(), &tx, &mut context))
                         },
-                        AppId::Calculator => {
+                        AppCmd::Calculator => {
                             Box::new(Calculator::new(context.fb.rect(), &tx, &mut context)?)
+                        },
+                        AppCmd::Dictionary { ref query, ref language } => {
+                            Box::new(Dictionary::new(context.fb.rect(), query, language, &tx, &mut context))
                         },
                     };
                     transfer_notifications(view.as_mut(), next_view.as_mut(), &mut context);
-                    history.push(view as Box<View>);
+                    history.push(view as Box<dyn View>);
                     view = next_view;
                 },
                 Event::Back => {
@@ -388,13 +401,13 @@ pub fn run() -> Result<(), Error> {
                     if let Some(index) = locate_by_id(view.as_ref(), ViewId::PresetMenu) {
                         let rect = *view.child(index).rect();
                         view.children_mut().remove(index);
-                        tx.send(Event::Expose(rect, UpdateMode::Gui)).unwrap();
+                        tx.send(Event::Expose(rect, UpdateMode::Gui)).ok();
                     } else {
                         let preset_menu = Menu::new(rect, ViewId::PresetMenu, MenuKind::Contextual,
                                                     vec![EntryKind::Command("Remove".to_string(),
                                                                             EntryId::RemovePreset(index))],
                                                     &mut context);
-                        tx.send(Event::Render(*preset_menu.rect(), UpdateMode::Gui)).unwrap();
+                        tx.send(Event::Render(*preset_menu.rect(), UpdateMode::Gui)).ok();
                         view.children_mut().push(Box::new(preset_menu) as Box<dyn View>);
                     }
                 },
@@ -403,24 +416,30 @@ pub fn run() -> Result<(), Error> {
                         continue;
                     }
                     let flw = FrontlightWindow::new(&mut context);
-                    tx.send(Event::Render(*flw.rect(), UpdateMode::Gui)).unwrap();
+                    tx.send(Event::Render(*flw.rect(), UpdateMode::Gui)).ok();
                     view.children_mut().push(Box::new(flw) as Box<dyn View>);
+                },
+                Event::ToggleInputHistoryMenu(id, rect) => {
+                    toggle_input_history_menu(view.as_mut(), id, rect, None, &tx, &mut context);
+                },
+                Event::ToggleNear(ViewId::KeyboardLayoutMenu, rect) => {
+                    toggle_keyboard_layout_menu(view.as_mut(), rect, None, &tx, &mut context);
                 },
                 Event::Close(ViewId::Frontlight) => {
                     if let Some(index) = locate::<FrontlightWindow>(view.as_ref()) {
                         let rect = *view.child(index).rect();
                         view.children_mut().remove(index);
-                        tx.send(Event::Expose(rect, UpdateMode::Gui)).unwrap();
+                        tx.send(Event::Expose(rect, UpdateMode::Gui)).ok();
                     }
                 },
                 Event::Close(id) => {
                     if let Some(index) = locate_by_id(view.as_ref(), id) {
                         let rect = overlapping_rectangle(view.child(index));
-                        tx.send(Event::Expose(rect, UpdateMode::Gui)).unwrap();
+                        tx.send(Event::Expose(rect, UpdateMode::Gui)).ok();
                         view.children_mut().remove(index);
                     }
                 },
-                Event::Select(EntryId::Rotate(n)) if n != context.display.rotation => {
+                Event::Select(EntryId::Rotate(n)) if n != context.display.rotation && view.might_rotate() => {
                     updating.retain(|tok, _| context.fb.wait(*tok).is_err());
                     if let Ok(dims) = context.fb.set_rotation(n) {
                         context.display.rotation = n;
@@ -431,13 +450,16 @@ pub fn run() -> Result<(), Error> {
                         }
                     }
                 },
+                Event::Select(EntryId::SetButtonScheme(button_scheme)) => {
+                    context.settings.button_scheme = button_scheme;
+                },
                 Event::Select(EntryId::ToggleInverted) => {
                     context.fb.toggle_inverted();
-                    tx.send(Event::Render(context.fb.rect(), UpdateMode::Gui)).unwrap();
+                    tx.send(Event::Render(context.fb.rect(), UpdateMode::Gui)).ok();
                 },
                 Event::Select(EntryId::ToggleMonochrome) => {
                     context.fb.toggle_monochrome();
-                    tx.send(Event::Render(context.fb.rect(), UpdateMode::Gui)).unwrap();
+                    tx.send(Event::Render(context.fb.rect(), UpdateMode::Gui)).ok();
                 },
                 Event::Select(EntryId::TakeScreenshot) => {
                     let name = Local::now().format("screenshot-%Y%m%d_%H%M%S.png");
@@ -469,7 +491,7 @@ pub fn run() -> Result<(), Error> {
                             let tx2 = tx.clone();
                             thread::spawn(move || {
                                 thread::sleep(Duration::from_secs(2));
-                                tx2.send(Event::Device(DeviceEvent::NetUp)).unwrap();
+                                tx2.send(Event::Device(DeviceEvent::NetUp)).ok();
                             });
                         } else {
                             context.online = false;
@@ -484,6 +506,9 @@ pub fn run() -> Result<(), Error> {
                         history[0].handle_event(&evt, &tx, &mut VecDeque::new(), &mut context);
                     };
                 },
+                Event::Device(DeviceEvent::RotateScreen(n)) => {
+                    tx.send(Event::Select(EntryId::Rotate(n))).ok();
+                },
                 Event::Select(EntryId::Quit) => {
                     break 'outer;
                 },
@@ -493,7 +518,7 @@ pub fn run() -> Result<(), Error> {
             }
 
             while let Some(ce) = bus.pop_front() {
-                tx.send(ce).unwrap();
+                tx.send(ce).ok();
             }
         }
     }

@@ -1,6 +1,4 @@
-- Dictionary, highlights, annotations.
 - ePUB renderer: RTL.
 - Metadata view.
 - Complex/fuzzy search queries?
-- Input field completions bar.
-- Applications: Terminal, Browser.
+- Applications: Notes, Terminal, Browser.

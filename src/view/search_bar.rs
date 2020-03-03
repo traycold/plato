@@ -19,15 +19,16 @@ pub struct SearchBar {
 }
 
 impl SearchBar {
-    pub fn new(rect: Rectangle, placeholder: &str, text: &str) -> SearchBar {
+    pub fn new(rect: Rectangle, input_id: ViewId, placeholder: &str, text: &str, context: &mut Context) -> SearchBar {
         let mut children = Vec::new();
         let dpi = CURRENT_DEVICE.dpi;
         let thickness = scale_by_dpi(THICKNESS_MEDIUM, dpi) as i32;
         let side = rect.height() as i32;
 
+        let search_rect = rect![rect.min, rect.min + side];
         let search_icon = Icon::new("search",
-                                    rect![rect.min, rect.min + side],
-                                    Event::Focus(Some(ViewId::SearchInput)))
+                                    search_rect,
+                                    Event::ToggleNear(ViewId::SearchMenu, search_rect))
                                .background(TEXT_BUMP_SMALL[0]);
 
         children.push(Box::new(search_icon) as Box<dyn View>);
@@ -40,9 +41,9 @@ impl SearchBar {
 
         let input_field = InputField::new(rect![pt!(rect.min.x + side + thickness, rect.min.y),
                                                 pt!(rect.max.x - side - thickness, rect.max.y)],
-                                          ViewId::SearchInput)
+                                          input_id)
                                      .border(false)
-                                     .text(text)
+                                     .text(text, context)
                                      .placeholder(placeholder);
 
         children.push(Box::new(input_field) as Box<dyn View>);
@@ -66,21 +67,26 @@ impl SearchBar {
             children,
         }
     }
+
+    pub fn set_text(&mut self, text: &str, hub: &Hub, context: &mut Context) {
+        if let Some(input_field) = self.children[2].downcast_mut::<InputField>() {
+            input_field.set_text(text, true, hub, context);
+        }
+    }
 }
 
 impl View for SearchBar {
     fn handle_event(&mut self, evt: &Event, _hub: &Hub, _bus: &mut Bus, _context: &mut Context) -> bool {
         match *evt {
             Event::Gesture(GestureEvent::Tap(center)) |
-            Event::Gesture(GestureEvent::HoldFinger(center)) if self.rect.includes(center) => true,
+            Event::Gesture(GestureEvent::HoldFingerShort(center, ..)) if self.rect.includes(center) => true,
             Event::Gesture(GestureEvent::Swipe { start, .. }) if self.rect.includes(start) => true,
             Event::Device(DeviceEvent::Finger { position, .. }) if self.rect.includes(position) => true,
             _ => false,
         }
     }
 
-    fn render(&self, _fb: &mut Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) -> Rectangle {
-        self.rect
+    fn render(&self, _fb: &mut dyn Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) {
     }
 
     fn resize(&mut self, rect: Rectangle, hub: &Hub, context: &mut Context) {

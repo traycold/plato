@@ -1,6 +1,6 @@
 use fnv::FnvHashSet;
 use regex::Regex;
-use super::layout::{FontKind, FontStyle, FontWeight, TextAlign, Display, Float};
+use super::layout::{FontKind, FontStyle, FontWeight, TextAlign, Display, Float, ListStyleType};
 use super::layout::{InlineMaterial, GlueMaterial, PenaltyMaterial};
 use crate::geom::Edge;
 use crate::unit::{pt_to_px, pc_to_px, mm_to_px, in_to_px};
@@ -78,7 +78,7 @@ pub fn parse_inline_material(value: &str, em: f32, rem: f32, dpi: u16) -> Vec<In
     let mut inlines = Vec::new();
     for decl in value.split(',') {
         let tokens: Vec<&str> = decl.trim().split_whitespace().collect();
-        match tokens.get(0).map(|s| *s) {
+        match tokens.get(0).cloned() {
             Some("glue") => {
                 let width = tokens.get(1).and_then(|s| parse_length(s, em, rem, dpi)).unwrap_or(0);
                 let stretch = tokens.get(2).and_then(|s| parse_length(s, em, rem,dpi)).unwrap_or(0);
@@ -125,9 +125,9 @@ pub fn parse_letter_spacing(value: &str, em: f32, rem: f32, dpi: u16) -> Option<
 pub fn parse_vertical_align(value: &str, em: f32, rem: f32, line_height: i32, dpi: u16) -> Option<i32> {
     if value == "baseline" {
         Some(0)
-    } else if value == "super" {
+    } else if value == "super" || value == "top" {
         Some(pt_to_px(0.4 * em, dpi).round() as i32)
-    } else if value == "sub" {
+    } else if value == "sub" || value == "bottom" {
         Some(pt_to_px(-0.2 * em, dpi).round() as i32)
     } else if value.ends_with('%') {
         value[..value.len() - 1].parse::<f32>().ok().map(|v| {
@@ -172,6 +172,23 @@ pub fn parse_float(value: &str) -> Option<Float> {
     match value {
         "left" => Some(Float::Left),
         "right" => Some(Float::Right),
+        _ => None,
+    }
+}
+
+pub fn parse_list_style_type(value: &str) -> Option<ListStyleType> {
+    match value {
+        "none" => Some(ListStyleType::None),
+        "disc" => Some(ListStyleType::Disc),
+        "circle" => Some(ListStyleType::Circle),
+        "square" => Some(ListStyleType::Square),
+        "decimal" => Some(ListStyleType::Decimal),
+        "lower-roman" => Some(ListStyleType::LowerRoman),
+        "upper-roman" => Some(ListStyleType::UpperRoman),
+        "lower-alpha" | "lower-latin" => Some(ListStyleType::LowerAlpha),
+        "upper-alpha" | "upper-latin" => Some(ListStyleType::UpperAlpha),
+        "lower-greek" => Some(ListStyleType::LowerGreek),
+        "upper-greek" => Some(ListStyleType::UpperGreek),
         _ => None,
     }
 }
@@ -317,9 +334,9 @@ pub fn parse_color(value: &str) -> Option<u8> {
             return None;
         }
         let chunk_size = if value.len() < 7 { 1 } else { 2 };
-        let red = u8::from_str_radix(&value[1..chunk_size+1].repeat(3 - chunk_size), 16).ok()?;
-        let green = u8::from_str_radix(&value[1+chunk_size..1+2*chunk_size].repeat(3 - chunk_size), 16).ok()?;
-        let blue = u8::from_str_radix(&value[1+2*chunk_size..1+3*chunk_size].repeat(3 - chunk_size), 16).ok()?;
+        let red = u8::from_str_radix(&value[1..=chunk_size].repeat(3 - chunk_size), 16).ok()?;
+        let green = u8::from_str_radix(&value[chunk_size+1..=2*chunk_size].repeat(3 - chunk_size), 16).ok()?;
+        let blue = u8::from_str_radix(&value[2*chunk_size+1..=3*chunk_size].repeat(3 - chunk_size), 16).ok()?;
         let color = luma(red as f32, green as f32, blue as f32) as u8;
         Some(color)
     } else {

@@ -72,7 +72,7 @@ impl PresetsList {
 
         self.current_page = self.current_page.min(self.pages.len().saturating_sub(1));
 
-        hub.send(Event::Render(self.rect, UpdateMode::Gui)).unwrap();
+        hub.send(Event::Render(self.rect, UpdateMode::Gui)).ok();
     }
 
     pub fn set_current_page(&mut self, dir: CycleDir) {
@@ -95,12 +95,12 @@ impl View for PresetsList {
                 match dir {
                     Dir::West => {
                         self.set_current_page(CycleDir::Next);
-                        hub.send(Event::Render(self.rect, UpdateMode::Gui)).unwrap();
+                        hub.send(Event::Render(self.rect, UpdateMode::Gui)).ok();
                         true
                     },
                     Dir::East => {
                         self.set_current_page(CycleDir::Previous);
-                        hub.send(Event::Render(self.rect, UpdateMode::Gui)).unwrap();
+                        hub.send(Event::Render(self.rect, UpdateMode::Gui)).ok();
                         true
                     },
                     _ => false,
@@ -108,16 +108,15 @@ impl View for PresetsList {
             },
             Event::Page(dir) => {
                 self.set_current_page(dir);
-                hub.send(Event::Render(self.rect, UpdateMode::Gui)).unwrap();
+                hub.send(Event::Render(self.rect, UpdateMode::Gui)).ok();
                 true
             },
             _ => false,
         }
     }
 
-    fn render(&self, fb: &mut Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) -> Rectangle {
+    fn render(&self, fb: &mut dyn Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) {
         fb.draw_rectangle(&self.rect, WHITE);
-        self.rect
     }
 
     fn is_background(&self) -> bool {

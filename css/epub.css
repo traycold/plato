@@ -1,5 +1,5 @@
 a {
-	text-decoration: underline;
+	color: #444;
 }
 
 i, em, cite, var, address {
@@ -25,7 +25,7 @@ h3 {
 	margin: 0.83em 0;
 }
 
-h4, p, blockquote, ul, ol, dl {
+h4, p, blockquote, dl {
 	margin: 1.12em 0;
 }
 
@@ -41,10 +41,11 @@ h6 {
 
 pre, code, samp, kbd {
 	font-family: monospace;
+	font-size: 0.891em;
 }
 
 ul, ol {
-	margin-left: 1em;
+	margin-left: 1.5em;
 	margin-top: 0.6rem;
 	margin-bottom: 0.6rem;
 }

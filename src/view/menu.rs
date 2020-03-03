@@ -251,30 +251,30 @@ impl View for Menu {
                 let id = self.id;
                 thread::spawn(move || {
                     thread::sleep(CLOSE_IGNITION_DELAY);
-                    hub2.send(Event::Close(id)).unwrap();
+                    hub2.send(Event::Close(id)).ok();
                 });
                 true
             },
             Event::Gesture(GestureEvent::Tap(center)) if !self.rect.includes(center) => {
                 if self.root {
-                    hub.send(Event::Close(self.id)).unwrap();
+                    bus.push_back(Event::Close(self.id));
                 } else {
                     bus.push_back(Event::CloseSub(self.id));
                 }
                 self.root
             },
-            Event::Gesture(GestureEvent::HoldFinger(center)) if !self.rect.includes(center) => self.root,
+            Event::Gesture(GestureEvent::HoldFingerShort(center, ..)) if !self.rect.includes(center) => self.root,
             Event::SubMenu(rect, ref entries) => {
                 let menu = Menu::new(rect, ViewId::SubMenu(self.sub_id),
                                      MenuKind::SubMenu, entries.clone(), context).root(false);
-                hub.send(Event::Render(*menu.rect(), UpdateMode::Gui)).unwrap();
+                hub.send(Event::Render(*menu.rect(), UpdateMode::Gui)).ok();
                 self.children.push(Box::new(menu) as Box<dyn View>);
                 self.sub_id = self.sub_id.wrapping_add(1);
                 true
             },
             Event::CloseSub(id) => {
                 if let Some(index) = locate_by_id(self, id) {
-                    hub.send(Event::Expose(*self.children[index].rect(), UpdateMode::Gui)).unwrap();
+                    hub.send(Event::Expose(*self.children[index].rect(), UpdateMode::Gui)).ok();
                     self.children.remove(index);
                 }
                 true
@@ -284,7 +284,7 @@ impl View for Menu {
         }
     }
 
-    fn render(&self, fb: &mut Framebuffer, _rect: Rectangle, fonts: &mut Fonts) -> Rectangle {
+    fn render(&self, fb: &mut dyn Framebuffer, _rect: Rectangle, fonts: &mut Fonts) {
         let dpi = CURRENT_DEVICE.dpi;
         let border_radius = scale_by_dpi(BORDER_RADIUS_MEDIUM, dpi) as i32;
         let border_thickness = scale_by_dpi(THICKNESS_LARGE, dpi) as u16;
@@ -345,8 +345,6 @@ impl View for Menu {
                                                                 color: BLACK },
                                                   &WHITE);
         }
-
-        self.rect
     }
 
     fn is_background(&self) -> bool {

@@ -98,7 +98,7 @@ impl ResultsBar {
                 self.children[index] = Box::new(prev_icon) as Box<dyn View>;
             }
             self.is_prev_disabled = is_prev_disabled;
-            hub.send(Event::Render(prev_rect, UpdateMode::Gui)).unwrap();
+            hub.send(Event::Render(prev_rect, UpdateMode::Gui)).ok();
         }
 
         let is_next_disabled = pages_count < 2 || current_page == pages_count - 1;
@@ -116,7 +116,7 @@ impl ResultsBar {
                 self.children[index] = Box::new(next_icon) as Box<dyn View>;
             }
             self.is_next_disabled = is_next_disabled;
-            hub.send(Event::Render(next_rect, UpdateMode::Gui)).unwrap();
+            hub.send(Event::Render(next_rect, UpdateMode::Gui)).ok();
         }
     }
 }
@@ -130,15 +130,14 @@ impl View for ResultsBar {
             },
             Event::ToggleNear(ViewId::PageMenu, _) => true,
             Event::Gesture(GestureEvent::Tap(center)) |
-            Event::Gesture(GestureEvent::HoldFinger(center)) if self.rect.includes(center) => true,
+            Event::Gesture(GestureEvent::HoldFingerShort(center, ..)) if self.rect.includes(center) => true,
             Event::Gesture(GestureEvent::Swipe { start, .. }) if self.rect.includes(start) => true,
             Event::Device(DeviceEvent::Finger { position, .. }) if self.rect.includes(position) => true,
             _ => false,
         }
     }
 
-    fn render(&self, _fb: &mut Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) -> Rectangle {
-        self.rect
+    fn render(&self, _fb: &mut dyn Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) {
     }
 
     fn resize(&mut self, rect: Rectangle, hub: &Hub, context: &mut Context) {

@@ -1,23 +1,23 @@
 pub mod djvu;
 pub mod pdf;
 pub mod epub;
+pub mod html;
 
 mod djvulibre_sys;
 mod mupdf_sys;
 
 use std::path::Path;
-use std::str::FromStr;
+use std::ffi::OsStr;
 use fnv::FnvHashSet;
-use isbn::Isbn;
 use lazy_static::lazy_static;
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::{is_combining_mark};
+use serde::{Serialize, Deserialize};
 use self::djvu::DjvuOpener;
 use self::pdf::PdfOpener;
 use self::epub::EpubDocument;
 use crate::geom::{Boundary, CycleDir};
-use crate::settings::EpubEngine;
-use crate::metadata::TextAlign;
+use crate::metadata::{TextAlign};
 use crate::framebuffer::Pixmap;
 
 pub const BYTES_PER_PAGE: f64 = 2048.0;
@@ -35,6 +35,32 @@ pub enum Location {
 pub struct BoundedText {
     pub text: String,
     pub rect: Boundary,
+    pub location: TextLocation,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum TextLocation {
+    Static(usize, usize),
+    Dynamic(usize),
+}
+
+impl TextLocation {
+    pub fn location(self) -> usize {
+        match self {
+            TextLocation::Static(page, _) => page,
+            TextLocation::Dynamic(offset) => offset,
+        }
+    }
+
+    #[inline]
+    pub fn min_max(self, other: Self) -> (Self, Self) {
+        if self < other {
+            (self, other)
+        } else {
+            (other, self)
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -86,7 +112,11 @@ pub trait Document: Send+Sync {
 
         match loc {
             Location::Exact(index) => {
-                Some(index.max(0).min(self.pages_count() - 1))
+                if index >= self.pages_count() {
+                    None
+                } else {
+                    Some(index)
+                }
             },
             Location::Previous(index) => {
                 if index > 0 {
@@ -105,43 +135,12 @@ pub trait Document: Send+Sync {
             _ => None,
         }
     }
-
-    fn isbn(&mut self) -> Option<String> {
-        let mut found = false;
-        let mut result = None;
-        let mut loc = Location::Exact(0);
-        let mut pages_count = 0;
-        while let Some((ref words, l)) = self.words(loc) {
-            for word in words.iter().map(|w| &*w.text) {
-                if word.contains("ISBN") {
-                    found = true;
-                    continue;
-                }
-                if found && word.len() >= 10 {
-                    let digits: String = word.chars()
-                                             .filter(|&c| c.is_digit(10) ||
-                                                          c == 'X')
-                                             .collect();
-                    if let Ok(isbn) = Isbn::from_str(&digits) {
-                        result = Some(isbn.to_string());
-                        break;
-                    }
-                }
-            }
-            pages_count += 1;
-            if pages_count > 10 || result.is_some() {
-                break;
-            }
-            loc = Location::Next(l);
-        }
-        result
-    }
 }
 
 pub fn file_kind<P: AsRef<Path>>(path: P) -> Option<String> {
     path.as_ref().extension()
-        .and_then(|os_ext| os_ext.to_str())
-        .map(|ext| ext.to_lowercase())
+        .and_then(OsStr::to_str)
+        .map(str::to_lowercase)
 }
 
 pub trait HumanSize {
@@ -171,51 +170,51 @@ pub fn asciify(name: &str) -> String {
         .replace('’', "'")
 }
 
-pub struct DocumentOpener {
-    epub_engine: EpubEngine,
+
+pub fn open<P: AsRef<Path>>(path: P) -> Option<Box<dyn Document>> {
+    file_kind(path.as_ref()).and_then(|k| {
+        match k.as_ref() {
+            "epub" => {
+                EpubDocument::new(&path)
+                             .map_err(|e| eprintln!("{}: {}.", path.as_ref().display(), e))
+                             .map(|d| Box::new(d) as Box<dyn Document>).ok()
+            },
+            "djvu" | "djv" => {
+                DjvuOpener::new().and_then(|o| {
+                    o.open(path)
+                     .map(|d| Box::new(d) as Box<dyn Document>)
+                })
+            },
+            _ => {
+                PdfOpener::new().and_then(|o| {
+                    o.open(path)
+                     .map(|d| Box::new(d) as Box<dyn Document>)
+                })
+            },
+        }
+    })
 }
 
-impl DocumentOpener {
-    pub fn new(epub_engine: EpubEngine) -> DocumentOpener {
-        DocumentOpener { epub_engine }
-    }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SimpleTocEntry {
+    Leaf(String, TocLocation),
+    Container(String, TocLocation, Vec<SimpleTocEntry>),
+}
 
-    pub fn open<P: AsRef<Path>>(&self, path: P) -> Option<Box<dyn Document>> {
-        file_kind(path.as_ref()).and_then(|k| {
-            match k.as_ref() {
-                "epub" => {
-                    match self.epub_engine {
-                        EpubEngine::BuiltIn => {
-                            EpubDocument::new(path)
-                                         .map(|d| Box::new(d) as Box<dyn Document>).ok()
-                        },
-                        EpubEngine::Mupdf => {
-                            PdfOpener::new()
-                                .and_then(|mut o| {
-                                    let css_path = Path::new("user.css");
-                                    if css_path.exists() {
-                                        o.set_user_css(css_path).ok();
-                                    }
-                                    o.open(path)
-                                     .map(|d| Box::new(d) as Box<dyn Document>)
-                                })
-                        },
-                    }
-                },
-                "djvu" | "djv" => {
-                    DjvuOpener::new().and_then(|o| {
-                        o.open(path)
-                         .map(|d| Box::new(d) as Box<dyn Document>)
-                    })
-                },
-                _ => {
-                    PdfOpener::new().and_then(|o| {
-                        o.open(path)
-                         .map(|d| Box::new(d) as Box<dyn Document>)
-                    })
-                },
-            }
-        })
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum TocLocation {
+    Exact(usize),
+    Uri(String),
+}
+
+impl From<TocLocation> for Location {
+    fn from(loc: TocLocation) -> Location {
+        match loc {
+            TocLocation::Exact(n) => Location::Exact(n),
+            TocLocation::Uri(uri) => Location::Uri(uri),
+        }
     }
 }
 
@@ -254,7 +253,7 @@ pub fn toc_as_html_aux(toc: &[TocEntry], chap_index: usize, buf: &mut String) {
 }
 
 #[inline]
-fn chapter<'a>(index: usize, toc: &'a [TocEntry]) -> Option<&'a TocEntry> {
+fn chapter(index: usize, toc: &[TocEntry]) -> Option<&TocEntry> {
     let mut chap = None;
     let mut chap_index = 0;
     chapter_aux(toc, index, &mut chap, &mut chap_index);
@@ -274,7 +273,7 @@ fn chapter_aux<'a>(toc: &'a [TocEntry], index: usize, chap: &mut Option<&'a TocE
 }
 
 #[inline]
-fn chapter_relative<'a>(index: usize, dir: CycleDir, toc: &'a [TocEntry]) -> Option<&'a TocEntry> {
+fn chapter_relative(index: usize, dir: CycleDir, toc: &[TocEntry]) -> Option<&TocEntry> {
     let chap = chapter(index, toc);
 
     match dir {

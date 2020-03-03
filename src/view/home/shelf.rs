@@ -67,7 +67,7 @@ impl Shelf {
         }
 
         self.max_lines = max_lines;
-        hub.send(Event::Render(self.rect, UpdateMode::Gui)).unwrap();
+        hub.send(Event::Render(self.rect, UpdateMode::Partial)).ok();
     }
 }
 
@@ -95,8 +95,7 @@ impl View for Shelf {
         }
     }
 
-    fn render(&self, _fb: &mut Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) -> Rectangle {
-        self.rect
+    fn render(&self, _fb: &mut dyn Framebuffer, _rect: Rectangle, _fonts: &mut Fonts) {
     }
 
     fn rect(&self) -> &Rectangle {

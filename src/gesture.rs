@@ -8,11 +8,12 @@ use crate::unit::mm_to_px;
 use crate::input::{DeviceEvent, FingerStatus, ButtonCode, ButtonStatus};
 use crate::view::Event;
 use crate::device::CURRENT_DEVICE;
-use crate::geom::{Point, Dir, Axis};
+use crate::geom::{Point, Vec2, Dir, DiagDir, Axis, nearest_segment_point, elbow};
 
-pub const JITTER_TOLERANCE_MM: f32 = 6.0;
-pub const FINGER_HOLD_DELAY: Duration = Duration::from_millis(666);
-pub const BUTTON_HOLD_DELAY: Duration = Duration::from_millis(1500);
+pub const TAP_JITTER_MM: f32 = 6.0;
+pub const HOLD_JITTER_MM: f32 = 1.5;
+pub const HOLD_DELAY_SHORT: Duration = Duration::from_millis(666);
+pub const HOLD_DELAY_LONG: Duration = Duration::from_millis(1333);
 
 #[derive(Debug, Copy, Clone)]
 pub enum GestureEvent {
@@ -28,32 +29,45 @@ pub enum GestureEvent {
         starts: [Point; 2],
         ends: [Point; 2],
     },
+    Arrow {
+        dir: Dir,
+        start: Point,
+        end: Point,
+    },
+    Corner {
+        dir: DiagDir,
+        start: Point,
+        end: Point,
+    },
     Pinch {
         axis: Axis,
+        strength: u32,
         starts: [Point; 2],
         ends: [Point; 2],
-        strength: u32,
     },
     Spread {
         axis: Axis,
+        strength: u32,
         starts: [Point; 2],
         ends: [Point; 2],
-        strength: u32,
     },
     Rotate {
-        angle: f32,
-        quarter_turns: i8,
         center: Point,
+        quarter_turns: i8,
+        angle: f32,
     },
-    HoldFinger(Point),
-    HoldButton(ButtonCode),
+    Cross(Point),
+    HoldFingerShort(Point, i32),
+    HoldFingerLong(Point, i32),
+    HoldButtonShort(ButtonCode),
+    HoldButtonLong(ButtonCode),
 }
 
 #[derive(Debug)]
 pub struct TouchState {
     time: f64,
-    initial: Point,
-    current: Point,
+    held: bool,
+    positions: Vec<Point>,
 }
 
 pub fn gesture_events(rx: Receiver<DeviceEvent>) -> Receiver<Event> {
@@ -65,58 +79,86 @@ pub fn gesture_events(rx: Receiver<DeviceEvent>) -> Receiver<Event> {
 pub fn parse_gesture_events(rx: &Receiver<DeviceEvent>, ty: &Sender<Event>) {
     let contacts: Arc<Mutex<FnvHashMap<i32, TouchState>>> = Arc::new(Mutex::new(FnvHashMap::default()));
     let buttons: Arc<Mutex<FnvHashMap<ButtonCode, f64>>> = Arc::new(Mutex::new(FnvHashMap::default()));
-    let mut segments: Vec<(Point, Point)> = Vec::new();
-    let jitter = mm_to_px(JITTER_TOLERANCE_MM, CURRENT_DEVICE.dpi);
+    let segments: Arc<Mutex<Vec<Vec<Point>>>> = Arc::new(Mutex::new(Vec::new()));
+    let tap_jitter = mm_to_px(TAP_JITTER_MM, CURRENT_DEVICE.dpi);
+    let hold_jitter = mm_to_px(HOLD_JITTER_MM, CURRENT_DEVICE.dpi);
+
     while let Ok(evt) = rx.recv() {
-        ty.send(Event::Device(evt)).unwrap();
+        ty.send(Event::Device(evt)).ok();
         match evt {
             DeviceEvent::Finger { status: FingerStatus::Down, position, id, time } => {
                 let mut ct = contacts.lock().unwrap();
-                ct.insert(id, TouchState { time, initial: position, current: position });
+                ct.insert(id, TouchState { time, held: false, positions: vec![position] });
                 let ty = ty.clone();
                 let contacts = contacts.clone();
+                let segments = segments.clone();
                 thread::spawn(move || {
-                    thread::sleep(FINGER_HOLD_DELAY);
-                    let mut ct = contacts.lock().unwrap();
-                    // We don't want to interfere with rotation gestures.
-                    // A better fix would be to emit multi-hold events?
-                    if ct.len() > 1 {
-                        return;
-                    }
-                    let mut will_remove = None;
-                    if let Some(ts) = ct.get(&id) {
-                        if (ts.time - time).abs() < f64::EPSILON && (ts.current - position).length() < jitter {
-                            ty.send(Event::Gesture(GestureEvent::HoldFinger(position))).unwrap();
-                            will_remove = Some(id);
+                    let mut held = false;
+                    thread::sleep(HOLD_DELAY_SHORT);
+                    {
+                        let mut ct = contacts.lock().unwrap();
+                        let sg = segments.lock().unwrap();
+                        if ct.len() > 1 || !sg.is_empty() {
+                            return;
+                        }
+                        if let Some(ts) = ct.get(&id) {
+                            let tp = &ts.positions;
+                            if (ts.time - time).abs() < f64::EPSILON && (tp[tp.len()-1] - position).length() < hold_jitter
+                                                                     && (tp[tp.len()/2] - position).length() < hold_jitter {
+                                held = true;
+                                ty.send(Event::Gesture(GestureEvent::HoldFingerShort(position, id))).ok();
+                            }
+                        }
+                        if held {
+                            if let Some(ts) = ct.get_mut(&id) {
+                                ts.held = true;
+                            }
+                        } else {
+                            return;
                         }
                     }
-                    if let Some(id) = will_remove {
-                        ct.remove(&id);
+                    thread::sleep(HOLD_DELAY_LONG - HOLD_DELAY_SHORT);
+                    {
+                        let mut ct = contacts.lock().unwrap();
+                        let sg = segments.lock().unwrap();
+                        if ct.len() > 1 || !sg.is_empty() {
+                            return;
+                        }
+                        if let Some(ts) = ct.get_mut(&id) {
+                            let tp = &ts.positions;
+                            if (ts.time - time).abs() < f64::EPSILON && (tp[tp.len()-1] - position).length() < hold_jitter
+                                                                     && (tp[tp.len()/2] - position).length() < hold_jitter {
+                                ty.send(Event::Gesture(GestureEvent::HoldFingerLong(position, id))).ok();
+                            }
+                        }
                     }
                 });
             },
             DeviceEvent::Finger { status: FingerStatus::Motion, position, id, .. } => {
                 let mut ct = contacts.lock().unwrap();
                 if let Some(ref mut ts) = ct.get_mut(&id) {
-                    ts.current = position;
+                    ts.positions.push(position);
                 }
             },
             DeviceEvent::Finger { status: FingerStatus::Up, position, id, .. } => {
                 let mut ct = contacts.lock().unwrap();
-                if let Some(TouchState { initial, .. }) = ct.remove(&id) {
-                    segments.push((initial, position));
+                let mut sg = segments.lock().unwrap();
+                if let Some(mut ts) = ct.remove(&id) {
+                    if !ts.held {
+                        ts.positions.push(position);
+                        sg.push(ts.positions);
+                    }
                 }
-                if ct.is_empty() && !segments.is_empty() {
-                    let len = segments.len();
+                if ct.is_empty() && !sg.is_empty() {
+                    let len = sg.len();
                     if len == 1 {
-                        let ge = interpret_segment(segments.pop().unwrap(), jitter);
-                        ty.send(Event::Gesture(ge)).unwrap();
+                        ty.send(Event::Gesture(interpret_segment(&sg.pop().unwrap(), tap_jitter))).ok();
                     } else if len == 2 {
-                        let ge1 = interpret_segment(segments.pop().unwrap(), jitter);
-                        let ge2 = interpret_segment(segments.pop().unwrap(), jitter);
+                        let ge1 = interpret_segment(&sg.pop().unwrap(), tap_jitter);
+                        let ge2 = interpret_segment(&sg.pop().unwrap(), tap_jitter);
                         match (ge1, ge2) {
                             (GestureEvent::Tap(c1), GestureEvent::Tap(c2)) => {
-                                ty.send(Event::Gesture(GestureEvent::MultiTap([c1, c2]))).unwrap();
+                                ty.send(Event::Gesture(GestureEvent::MultiTap([c1, c2]))).ok();
                             },
                             (GestureEvent::Swipe { dir: d1, start: s1, end: e1, .. },
                              GestureEvent::Swipe { dir: d2, start: s2, end: e2, .. }) if d1 == d2 => {
@@ -146,8 +188,16 @@ pub fn parse_gesture_events(rx: &Receiver<DeviceEvent>, ty: &Sender<Event>) {
                                     })).unwrap();
                                 }
                             },
+                            (GestureEvent::Arrow { dir: Dir::East, start: s1, end: e1 }, GestureEvent::Arrow { dir: Dir::West, start: s2, end: e2 }) |
+                            (GestureEvent::Arrow { dir: Dir::West, start: s2, end: e2 }, GestureEvent::Arrow { dir: Dir::East, start: s1, end: e1 }) if s1.x < s2.x => {
+                                ty.send(Event::Gesture(GestureEvent::Cross((s1+e1+s2+e2)/4))).ok();
+                            },
+                            (GestureEvent::Tap(c), GestureEvent::Swipe { start: s, end: e, .. }) |
                             (GestureEvent::Swipe { start: s, end: e, .. }, GestureEvent::Tap(c)) |
-                            (GestureEvent::Tap(c), GestureEvent::Swipe { start: s, end: e, .. }) => {
+                            (GestureEvent::Tap(c), GestureEvent::Arrow { start: s, end: e, .. }) |
+                            (GestureEvent::Arrow { start: s, end: e, .. }, GestureEvent::Tap(c)) |
+                            (GestureEvent::Tap(c), GestureEvent::Corner { start: s, end: e, .. }) |
+                            (GestureEvent::Corner { start: s, end: e, .. }, GestureEvent::Tap(c)) => {
                                 // Angle are positive in the counter clockwise direction.
                                 let angle = ((e - c).angle() - (s - c).angle()).to_degrees();
                                 let quarter_turns = (angle / 90.0).round() as i8;
@@ -160,7 +210,7 @@ pub fn parse_gesture_events(rx: &Receiver<DeviceEvent>, ty: &Sender<Event>) {
                             _ => (),
                         }
                     } else {
-                        segments.clear();
+                        sg.clear();
                     }
                 }
             },
@@ -170,11 +220,22 @@ pub fn parse_gesture_events(rx: &Receiver<DeviceEvent>, ty: &Sender<Event>) {
                 let ty = ty.clone();
                 let buttons = buttons.clone();
                 thread::spawn(move || {
-                    thread::sleep(BUTTON_HOLD_DELAY);
-                    let bt = buttons.lock().unwrap();
-                    if let Some(&initial_time) = bt.get(&code) {
-                        if (initial_time - time).abs() < f64::EPSILON {
-                            ty.send(Event::Gesture(GestureEvent::HoldButton(code))).unwrap();
+                    thread::sleep(HOLD_DELAY_SHORT);
+                    {
+                        let bt = buttons.lock().unwrap();
+                        if let Some(&initial_time) = bt.get(&code) {
+                            if (initial_time - time).abs() < f64::EPSILON {
+                                ty.send(Event::Gesture(GestureEvent::HoldButtonShort(code))).ok();
+                            }
+                        }
+                    }
+                    thread::sleep(HOLD_DELAY_LONG - HOLD_DELAY_SHORT);
+                    {
+                        let bt = buttons.lock().unwrap();
+                        if let Some(&initial_time) = bt.get(&code) {
+                            if (initial_time - time).abs() < f64::EPSILON {
+                                ty.send(Event::Gesture(GestureEvent::HoldButtonLong(code))).ok();
+                            }
                         }
                     }
                 });
@@ -188,15 +249,43 @@ pub fn parse_gesture_events(rx: &Receiver<DeviceEvent>, ty: &Sender<Event>) {
     }
 }
 
-fn interpret_segment((a, b): (Point, Point), jitter: f32) -> GestureEvent {
+fn interpret_segment(sp: &[Point], tap_jitter: f32) -> GestureEvent {
+    let a = sp[0];
+    let b = sp[sp.len()-1];
     let ab = b - a;
-    if ab.length() < jitter {
+    let d = ab.length();
+    if d < tap_jitter {
         GestureEvent::Tap(a)
     } else {
-        GestureEvent::Swipe {
-            dir: ab.dir(),
-            start: a,
-            end: b,
+        let p = sp[elbow(sp)];
+        let (n, p) = {
+            let p: Vec2 = p.into();
+            let (n, _) = nearest_segment_point(p, a.into(), b.into());
+            (n, p)
+        };
+        let np = p - n;
+        let ds = np.length();
+        if ds > d / 5.0 {
+            let g = (np.x as f32 / np.y as f32).abs();
+            if g < 0.5 || g > 2.0 {
+                GestureEvent::Arrow {
+                    dir: np.dir(),
+                    start: a,
+                    end: b,
+                }
+            } else {
+                GestureEvent::Corner {
+                    dir: np.diag_dir(),
+                    start: a,
+                    end: b,
+                }
+            }
+        } else {
+            GestureEvent::Swipe {
+                start: a,
+                end: b,
+                dir: ab.dir(),
+            }
         }
     }
 }

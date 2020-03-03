@@ -11,6 +11,7 @@
 
 pub mod common;
 pub mod filler;
+pub mod image;
 pub mod icon;
 pub mod label;
 pub mod button;
@@ -36,8 +37,9 @@ pub mod keyboard;
 pub mod key;
 pub mod home;
 pub mod reader;
-pub mod sketch;
+pub mod dictionary;
 pub mod calculator;
+pub mod sketch;
 
 use std::time::Duration;
 use std::path::PathBuf;
@@ -47,8 +49,8 @@ use std::fmt::{self, Debug};
 use fnv::FnvHashMap;
 use downcast_rs::{Downcast, impl_downcast};
 use crate::font::Fonts;
-use crate::document::{Location, TocEntry};
-use crate::settings::SecondColumn;
+use crate::document::{Location, TextLocation, TocEntry};
+use crate::settings::{ButtonScheme, SecondColumn, RotationLock};
 use crate::metadata::{Info, ZoomMode, SortMethod, TextAlign, SimpleStatus, PageScheme, Margin};
 use crate::geom::{LinearDir, CycleDir, Rectangle, Boundary};
 use crate::framebuffer::{Framebuffer, UpdateMode};
@@ -74,21 +76,25 @@ pub type Hub = Sender<Event>;
 
 pub trait View: Downcast {
     fn handle_event(&mut self, evt: &Event, hub: &Hub, bus: &mut Bus, context: &mut Context) -> bool;
-    fn render(&self, fb: &mut Framebuffer, rect: Rectangle, fonts: &mut Fonts) -> Rectangle;
+    fn render(&self, fb: &mut dyn Framebuffer, rect: Rectangle, fonts: &mut Fonts);
     fn rect(&self) -> &Rectangle;
     fn rect_mut(&mut self) -> &mut Rectangle;
     fn children(&self) -> &Vec<Box<dyn View>>;
     fn children_mut(&mut self) -> &mut Vec<Box<dyn View>>;
 
+    fn render_rect(&self, _rect: &Rectangle) -> Rectangle {
+        *self.rect()
+    }
+
     fn resize(&mut self, rect: Rectangle, _hub: &Hub, _context: &mut Context) {
         *self.rect_mut() = rect;
     }
 
-    fn child(&self, index: usize) -> &View {
+    fn child(&self, index: usize) -> &dyn View {
         self.children()[index].as_ref()
     }
 
-    fn child_mut(&mut self, index: usize) -> &mut View {
+    fn child_mut(&mut self, index: usize) -> &mut dyn View {
         self.children_mut()[index].as_mut()
     }
 
@@ -126,7 +132,7 @@ impl Debug for Box<dyn View> {
 // The consistency must also be ensured by the views: popups, for example, need to
 // capture any tap gesture with a touch point inside their rectangle.
 // A child can send events to the main channel through the *hub* or communicate with its parent through the *bus*.
-pub fn handle_event(view: &mut View, evt: &Event, hub: &Hub, parent_bus: &mut Bus, context: &mut Context) -> bool {
+pub fn handle_event(view: &mut dyn View, evt: &Event, hub: &Hub, parent_bus: &mut Bus, context: &mut Context) -> bool {
     if view.len() > 0 {
         let mut captured = false;
 
@@ -143,8 +149,12 @@ pub fn handle_event(view: &mut View, evt: &Event, hub: &Hub, parent_bus: &mut Bu
             }
         }
 
-        child_bus.retain(|child_evt| !view.handle_event(child_evt, hub, parent_bus, context));
+        let mut temp_bus: Bus = VecDeque::with_capacity(1);
+
+        child_bus.retain(|child_evt| !view.handle_event(child_evt, hub, &mut temp_bus, context));
+
         parent_bus.append(&mut child_bus);
+        parent_bus.append(&mut temp_bus);
 
         captured || view.handle_event(evt, hub, parent_bus, context)
     } else {
@@ -152,15 +162,19 @@ pub fn handle_event(view: &mut View, evt: &Event, hub: &Hub, parent_bus: &mut Bu
     }
 }
 
-pub fn render(view: &View, rect: &mut Rectangle, fb: &mut Framebuffer, fonts: &mut Fonts, updating: &mut FnvHashMap<u32, Rectangle>) {
+pub fn render(view: &dyn View, rect: &mut Rectangle, fb: &mut dyn Framebuffer, fonts: &mut Fonts, updating: &mut FnvHashMap<u32, Rectangle>) {
     render_aux(view, rect, fb, fonts, &mut false, true, updating);
 }
 
-pub fn render_no_wait(view: &View, rect: &mut Rectangle, fb: &mut Framebuffer, fonts: &mut Fonts, updating: &mut FnvHashMap<u32, Rectangle>) {
+pub fn render_region(view: &dyn View, rect: &mut Rectangle, fb: &mut dyn Framebuffer, fonts: &mut Fonts, updating: &mut FnvHashMap<u32, Rectangle>) {
+    render_aux(view, rect, fb, fonts, &mut true, true, updating);
+}
+
+pub fn render_no_wait(view: &dyn View, rect: &mut Rectangle, fb: &mut dyn Framebuffer, fonts: &mut Fonts, updating: &mut FnvHashMap<u32, Rectangle>) {
     render_aux(view, rect, fb, fonts, &mut false, false, updating);
 }
 
-pub fn render_no_wait_region(view: &View, rect: &mut Rectangle, fb: &mut Framebuffer, fonts: &mut Fonts, updating: &mut FnvHashMap<u32, Rectangle>) {
+pub fn render_no_wait_region(view: &dyn View, rect: &mut Rectangle, fb: &mut dyn Framebuffer, fonts: &mut Fonts, updating: &mut FnvHashMap<u32, Rectangle>) {
     render_aux(view, rect, fb, fonts, &mut true, false, updating);
 }
 
@@ -168,19 +182,20 @@ pub fn render_no_wait_region(view: &View, rect: &mut Rectangle, fb: &mut Framebu
 // Once we reach that z-level, we start comparing the candidate rectangles with the source
 // rectangle. If there is an overlap, we render the corresponding view. And update the source
 // rectangle by absorbing the candidate rectangle into it.
-fn render_aux(view: &View, rect: &mut Rectangle, fb: &mut Framebuffer, fonts: &mut Fonts, above: &mut bool, wait: bool, updating: &mut FnvHashMap<u32, Rectangle>) {
+fn render_aux(view: &dyn View, rect: &mut Rectangle, fb: &mut dyn Framebuffer, fonts: &mut Fonts, above: &mut bool, wait: bool, updating: &mut FnvHashMap<u32, Rectangle>) {
     // FIXME: rect is used as an identifier.
     if !*above && view.rect() == rect {
         *above = true;
     }
 
     if *above && (view.len() == 0 || view.is_background()) && view.rect().overlaps(rect) {
+        let render_rect = view.render_rect(rect);
         if wait {
             updating.retain(|tok, urect| {
-                !view.rect().overlaps(urect) || fb.wait(*tok).is_err()
+                !render_rect.overlaps(urect) || fb.wait(*tok).is_err()
             });
         }
-        let render_rect = view.render(fb, *rect, fonts);
+        view.render(fb, *rect, fonts);
         rect.absorb(&render_rect);
     }
 
@@ -191,12 +206,13 @@ fn render_aux(view: &View, rect: &mut Rectangle, fb: &mut Framebuffer, fonts: &m
 
 // When a floating window is destroyed, it leaves a crack underneath.
 // Each view intersecting the crack's rectangle needs to be redrawn.
-pub fn expose(view: &View, rect: &mut Rectangle, fb: &mut Framebuffer, fonts: &mut Fonts, updating: &mut FnvHashMap<u32, Rectangle>) {
+pub fn expose(view: &dyn View, rect: &mut Rectangle, fb: &mut dyn Framebuffer, fonts: &mut Fonts, updating: &mut FnvHashMap<u32, Rectangle>) {
     if (view.len() == 0 || view.is_background()) && view.rect().overlaps(rect) {
+        let render_rect = view.render_rect(rect);
         updating.retain(|tok, urect| {
-            !view.rect().overlaps(urect) || fb.wait(*tok).is_err()
+            !render_rect.overlaps(urect) || fb.wait(*tok).is_err()
         });
-        let render_rect = view.render(fb, *rect, fonts);
+        view.render(fb, *rect, fonts);
         rect.absorb(&render_rect);
     }
 
@@ -208,6 +224,7 @@ pub fn expose(view: &View, rect: &mut Rectangle, fb: &mut Framebuffer, fonts: &m
 #[derive(Debug, Clone)]
 pub enum Event {
     Render(Rectangle, UpdateMode),
+    RenderRegion(Rectangle, UpdateMode),
     RenderNoWait(Rectangle, UpdateMode),
     RenderNoWaitRegion(Rectangle, UpdateMode),
     Expose(Rectangle, UpdateMode),
@@ -239,9 +256,12 @@ pub enum Event {
     Focus(Option<ViewId>),
     Select(EntryId),
     PropagateSelect(EntryId),
+    EditLanguages,
+    Define(String),
     Submit(ViewId, String),
     Slider(SliderId, f32, FingerStatus),
     ToggleNear(ViewId, Rectangle),
+    ToggleInputHistoryMenu(ViewId, Rectangle),
     ToggleBookMenu(Rectangle, usize),
     ToggleCategoryMenu(Rectangle, String),
     TogglePresetMenu(Rectangle, usize),
@@ -252,7 +272,8 @@ pub enum Event {
     Show(ViewId),
     Close(ViewId),
     CloseSub(ViewId),
-    SearchResult(usize, Boundary),
+    Search(String),
+    SearchResult(usize, Vec<Boundary>),
     EndOfSearch,
     Finished,
     ClockTick,
@@ -277,22 +298,32 @@ pub enum Event {
     Quit,
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub enum AppId {
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum AppCmd {
     Sketch,
     Calculator,
+    Dictionary {
+        query: String,
+        language: String,
+    },
 }
 
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+#[derive(Debug, Copy, Clone, Hash, Eq, PartialEq)]
 pub enum ViewId {
     Home,
     Reader,
     SortMenu,
     MainMenu,
     TitleMenu,
+    SelectionMenu,
+    AnnotationMenu,
     BatteryMenu,
     ClockMenu,
+    SearchTargetMenu,
+    InputHistoryMenu,
+    KeyboardLayoutMenu,
     Frontlight,
+    Dictionary,
     FontSizeMenu,
     TextAlignMenu,
     FontFamilyMenu,
@@ -312,13 +343,21 @@ pub enum ViewId {
     GoToPageInput,
     GoToResultsPage,
     GoToResultsPageInput,
-    ExportAs,
-    ExportAsInput,
+    NamePage,
+    NamePageInput,
+    EditNote,
+    EditNoteInput,
+    EditLanguages,
+    EditLanguagesInput,
+    SaveAs,
+    SaveAsInput,
     AddCategories,
     AddCategoriesInput,
     RenameCategory,
     RenameCategoryInput,
-    SearchInput,
+    HomeSearchInput,
+    ReaderSearchInput,
+    DictionarySearchInput,
     CalculatorInput,
     SearchBar,
     Keyboard,
@@ -405,6 +444,12 @@ pub enum EntryKind {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum EntryId {
+    Save,
+    SaveAs,
+    Import,
+    Load(PathBuf),
+    Reload,
+    CleanUp,
     Sort(SortMethod),
     StatusFilter(Option<SimpleStatus>),
     ReverseOrder,
@@ -421,13 +466,23 @@ pub enum EntryId {
     RemoveMatches,
     RemovePreset(usize),
     SecondColumn(SecondColumn),
-    Load(PathBuf),
-    ExportMatches,
     ApplyCroppings(usize, PageScheme),
     RemoveCroppings,
     SetZoomMode(ZoomMode),
-    ToggleFirstPage,
+    SetPageName,
+    RemovePageName,
+    HighlightSelection,
+    AnnotateSelection,
+    DefineSelection,
+    SearchForSelection,
+    AdjustSelection,
+    RemoveAnnotation([TextLocation; 2]),
+    EditAnnotationNote([TextLocation; 2]),
+    RemoveAnnotationNote([TextLocation; 2]),
+    GoTo(usize),
+    GoToSelectedPageName,
     SearchDirection(LinearDir),
+    SetButtonScheme(ButtonScheme),
     SetFontFamily(String),
     SetFontSize(i32),
     SetTextAlign(TextAlign),
@@ -435,17 +490,22 @@ pub enum EntryId {
     SetLineHeight(i32),
     SetContrastExponent(i32),
     SetContrastGray(i32),
+    SetRotationLock(Option<RotationLock>),
+    SetSearchTarget(Option<String>),
+    SetInputText(ViewId, String),
+    SetKeyboardLayout(String),
+    ToggleFuzzy,
     ToggleInverted,
     ToggleMonochrome,
     ToggleWifi,
     Rotate(i8),
-    Launch(AppId),
+    Launch(AppCmd),
     SetPenSize(i32),
     SetPenColor(u8),
     TogglePenDynamism,
+    ReloadDictionaries,
     New,
     Refresh,
-    Save,
     OpenMetadata,
     TakeScreenshot,
     StartNickel,

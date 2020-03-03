@@ -5,13 +5,13 @@ use std::thread;
 use std::process;
 use std::fs::{self, File};
 use std::path::PathBuf;
-use reqwest::Client;
+use reqwest::blocking::Client;
 use serde_json::json;
 use chrono::{Duration, Utc, Local, DateTime};
 use serde::{Serialize, Deserialize};
 use serde_json::Value as JsonValue;
 use failure::{Error, ResultExt, format_err};
-use self::helpers::{load_toml, load_json, save_json};
+use self::helpers::{load_toml, load_json, save_json, decode_entities};
 
 const SETTINGS_PATH: &str = "Settings.toml";
 const SESSION_PATH: &str = ".session.json";
@@ -205,6 +205,7 @@ fn run() -> Result<(), Error> {
 
                 let title = element.get("title")
                                    .and_then(|v| v.as_str())
+                                   .map(decode_entities)
                                    .map(String::from)
                                    .unwrap_or_default();
 
@@ -240,6 +241,8 @@ fn run() -> Result<(), Error> {
                                         .and_then(|v| DateTime::parse_from_str(v, DATE_FORMAT).ok())
                                         .ok_or_else(|| format_err!("Missing updated at."))?;
 
+                session.since = updated_at.timestamp();
+
                 let epub_path = settings.save_path.join(&format!("{}.epub", id));
                 if epub_path.exists() {
                     continue;
@@ -248,12 +251,17 @@ fn run() -> Result<(), Error> {
                 let mut file = File::create(&epub_path)?;
                 let url = format!("{}/api/entries/{}/export.epub", settings.base_url, id);
 
-                client.get(&url)
-                      .header(reqwest::header::AUTHORIZATION,
-                              format!("Bearer {}", &session.access_token.data))
-                      .send()
-                      .and_then(|mut body| body.copy_to(&mut file))
-                      .map_err(|err| eprintln!("{}", err)).ok();
+                let response = client.get(&url)
+                                     .header(reqwest::header::AUTHORIZATION,
+                                             format!("Bearer {}", &session.access_token.data))
+                                     .send()
+                                     .and_then(|mut body| body.copy_to(&mut file));
+
+                if let Err(err) = response {
+                    eprintln!("{}", err);
+                    fs::remove_file(epub_path).ok();
+                    continue;
+                }
 
                 downloads_count += 1;
 
@@ -281,8 +289,6 @@ fn run() -> Result<(), Error> {
                 });
 
                 println!("{}", event);
-
-                session.since = updated_at.timestamp();
             }
         }
 

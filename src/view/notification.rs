@@ -30,7 +30,7 @@ impl Notification {
 
         thread::spawn(move || {
             thread::sleep(NOTIFICATION_CLOSE_DELAY);
-            hub2.send(Event::Close(id)).unwrap();
+            hub2.send(Event::Close(id)).ok();
         });
 
         let dpi = CURRENT_DEVICE.dpi;
@@ -58,7 +58,7 @@ impl Notification {
         let rect = rect![dx, dy,
                          dx + dialog_width, dy + dialog_height];
 
-        hub.send(Event::Render(rect, UpdateMode::Gui)).unwrap();
+        hub.send(Event::Render(rect, UpdateMode::Gui)).ok();
 
         context.notification_index = index.wrapping_add(1);
 
@@ -83,7 +83,7 @@ impl View for Notification {
         }
     }
 
-    fn render(&self, fb: &mut Framebuffer, _rect: Rectangle, fonts: &mut Fonts) -> Rectangle {
+    fn render(&self, fb: &mut dyn Framebuffer, _rect: Rectangle, fonts: &mut Fonts) {
         let dpi = CURRENT_DEVICE.dpi;
 
         let border_radius = scale_by_dpi(BORDER_RADIUS_MEDIUM, dpi) as i32;
@@ -104,7 +104,6 @@ impl View for Notification {
         let pt = pt!(self.rect.min.x + dx, self.rect.max.y - dy);
 
         font.render(fb, TEXT_NORMAL[1], &plan, pt);
-        self.rect
     }
 
     fn resize(&mut self, _rect: Rectangle, _hub: &Hub, context: &mut Context) {
